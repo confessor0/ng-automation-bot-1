@@ -1,0 +1,20 @@
+{
+  "instruments": {
+    "NATGASMINI": {
+      "symbol": "NATGASMINI",
+      "instrument_type": "NATGASMINI",
+      "lot_size": 1250,
+      "strategy_type": "MA9",
+      "active": true,
+      "added_at": "2026-01-05T02:22:41.980649"
+    }
+  },
+  "watchlist": [
+    {
+      "symbol": "NATURALGAS ",
+      "type": "OPT",
+      "added_at": "2026-01-05T02:23:56.673998"
+    }
+  ],
+  "last_updated": "2026-01-05T03:12:59.000000"
+}

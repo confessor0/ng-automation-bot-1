@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: ng-automation-bot
+    env: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: FYERS_APP_ID
+        sync: false
+      - key: FYERS_SECRET_ID
+        sync: false
+      - key: FYERS_REDIRECT_URI
+        sync: false
+      - key: FYERS_ACCESS_TOKEN
+        sync: false
+      - key: FYERS_REFRESH_TOKEN
+        sync: false
+      - key: FYERS_PIN
+        sync: false
+      - key: FYERS_TOTP_KEY
+        sync: false
+      - key: FYERS_ID
+        sync: false
+      - key: PORT
+        value: 5055
+    plan: free

@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NG Strategic Console — Login</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+        rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #0a0e1a;
+            color: #f3f4f6;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Animated Gradient Background — matches dashboard */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background:
+                radial-gradient(ellipse at 20% 20%, rgba(59, 130, 246, 0.08) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 80%, rgba(139, 92, 246, 0.06) 0%, transparent 50%),
+                radial-gradient(ellipse at 50% 50%, rgba(16, 185, 129, 0.04) 0%, transparent 60%);
+            animation: bgShift 20s ease-in-out infinite alternate;
+            z-index: 0;
+            pointer-events: none;
+        }
+
+        @keyframes bgShift {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+
+        /* Floating Particles */
+        .particles {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            z-index: 1;
+            pointer-events: none;
+        }
+
+        .particle {
+            position: absolute;
+            background: rgba(99, 102, 241, 0.15);
+            border-radius: 50%;
+            animation: float-up linear infinite;
+        }
+
+        @keyframes float-up {
+            0% {
+                transform: translateY(100vh) translateX(0) scale(0);
+                opacity: 0;
+            }
+            10% {
+                opacity: 1;
+            }
+            90% {
+                opacity: 0.6;
+            }
+            100% {
+                transform: translateY(-10vh) translateX(40px) scale(1);
+                opacity: 0;
+            }
+        }
+
+        /* Glassmorphism Login Card */
+        .login-card {
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 40px 36px;
+            border-radius: 20px;
+            width: 360px;
+            box-shadow:
+                0 25px 50px -12px rgba(0, 0, 0, 0.5),
+                inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            z-index: 10;
+            position: relative;
+            animation: cardAppear 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        @keyframes cardAppear {
+            from {
+                opacity: 0;
+                transform: translateY(20px) scale(0.98);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .login-card:hover {
+            border-color: rgba(96, 165, 250, 0.12);
+            box-shadow:
+                0 25px 50px -12px rgba(0, 0, 0, 0.6),
+                0 0 30px rgba(59, 130, 246, 0.04),
+                inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        }
+
+        /* Logo / Title */
+        .logo-icon {
+            text-align: center;
+            font-size: 36px;
+            margin-bottom: 8px;
+        }
+
+        .title {
+            text-align: center;
+            font-size: 22px;
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            margin-bottom: 6px;
+            background: linear-gradient(135deg, #60a5fa 0%, #a78bfa 50%, #c084fc 100%);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: shimmerText 4s linear infinite;
+        }
+
+        @keyframes shimmerText {
+            0% { background-position: 0% center; }
+            100% { background-position: 200% center; }
+        }
+
+        .subtitle {
+            text-align: center;
+            font-size: 13px;
+            color: #64748b;
+            margin-bottom: 32px;
+            font-weight: 500;
+        }
+
+        /* Input Groups */
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 12px;
+            font-weight: 700;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px 16px;
+            background: rgba(15, 23, 42, 0.6);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 12px;
+            color: #f1f5f9;
+            font-size: 14px;
+            font-family: 'Inter', sans-serif;
+            font-weight: 500;
+            box-sizing: border-box;
+            outline: none;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        input::placeholder {
+            color: #475569;
+        }
+
+        input:focus {
+            border-color: rgba(96, 165, 250, 0.4);
+            box-shadow:
+                0 0 0 3px rgba(59, 130, 246, 0.1),
+                0 0 20px rgba(59, 130, 246, 0.05);
+            background: rgba(15, 23, 42, 0.8);
+        }
+
+        /* Submit Button */
+        .submit-btn {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%);
+            color: white;
+            border: 1px solid rgba(99, 102, 241, 0.3);
+            border-radius: 12px;
+            font-weight: 700;
+            font-size: 14px;
+            font-family: 'Inter', sans-serif;
+            cursor: pointer;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+            position: relative;
+            overflow: hidden;
+            margin-top: 8px;
+        }
+
+        .submit-btn:hover {
+            background: linear-gradient(135deg, #1d4ed8 0%, #4338ca 100%);
+            box-shadow: 0 6px 20px rgba(37, 99, 235, 0.35);
+            transform: translateY(-2px);
+        }
+
+        .submit-btn:active {
+            transform: translateY(1px);
+            box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2);
+        }
+
+        .submit-btn.loading {
+            pointer-events: none;
+            opacity: 0.8;
+        }
+
+        .submit-btn .spinner {
+            display: none;
+            width: 18px;
+            height: 18px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+            margin: 0 auto;
+        }
+
+        .submit-btn.loading .btn-text { display: none; }
+        .submit-btn.loading .spinner { display: block; }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Error Message */
+        .error {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            color: #f87171;
+            padding: 12px 16px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            text-align: center;
+            animation: shake 0.4s ease;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-6px); }
+            75% { transform: translateX(6px); }
+        }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            margin-top: 28px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .footer span {
+            font-size: 11px;
+            color: #475569;
+            font-weight: 500;
+        }
+
+        /* Mobile */
+        @media (max-width: 480px) {
+            .login-card {
+                width: calc(100% - 32px);
+                margin: 0 16px;
+                padding: 32px 24px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="particles" id="particles"></div>
+
+    <div class="login-card">
+        <div class="logo-icon">🛡️</div>
+        <div class="title">NG STRATEGIC CONSOLE</div>
+        <div class="subtitle">Secure Authentication Required</div>
+
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+
+        <form method="POST" id="loginForm">
+            <div class="input-group">
+                <label>Login ID</label>
+                <input type="text" name="username" placeholder="Enter your username" required autofocus
+                    autocomplete="username">
+            </div>
+            <div class="input-group">
+                <label>Password</label>
+                <input type="password" name="password" placeholder="••••••••" required
+                    autocomplete="current-password">
+            </div>
+            <button type="submit" class="submit-btn" id="submitBtn">
+                <span class="btn-text">Authenticate →</span>
+                <div class="spinner"></div>
+            </button>
+        </form>
+
+        <div class="footer">
+            <span>NG Automation v2.0 — Secure Trading System</span>
+        </div>
+    </div>
+
+    <script>
+        // Generate floating particles
+        const container = document.getElementById('particles');
+        for (let i = 0; i < 25; i++) {
+            const p = document.createElement('div');
+            p.className = 'particle';
+            p.style.left = Math.random() * 100 + '%';
+            const size = Math.random() * 6 + 3;
+            p.style.width = size + 'px';
+            p.style.height = size + 'px';
+            p.style.animationDuration = (Math.random() * 8 + 8) + 's';
+            p.style.animationDelay = (Math.random() * 10) + 's';
+            p.style.opacity = Math.random() * 0.5 + 0.1;
+            container.appendChild(p);
+        }
+
+        // Loading animation on submit
+        document.getElementById('loginForm').addEventListener('submit', function () {
+            const btn = document.getElementById('submitBtn');
+            btn.classList.add('loading');
+        });
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,9 @@
+fyers-apiv3
+pandas
+python-dotenv
+colorama
+PyJWT
+Flask
+requests
+pytz
+gunicorn

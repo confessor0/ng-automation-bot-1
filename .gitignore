@@ -1,0 +1,26 @@
+# Environment
+.env
+*.log
+__pycache__/
+.venv/
+venv/
+*.pyc
+.DS_Store
+
+# Fyers
+fyersApi.log
+fyersRequests.log
+.fyers_token_cache.json
+
+# Data
+*.db
+bot_output.log
+users.json
+
+# Artifacts / Temporary
+test_results.json
+step5_result.txt
+api_response.json
+fyers_error_dump.json
+order_intents.json
+Implementation Plan
