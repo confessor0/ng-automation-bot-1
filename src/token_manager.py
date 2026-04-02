@@ -13,7 +13,7 @@ from src.config import FYERS_APP_ID, FYERS_SECRET_ID, FYERS_REDIRECT_URI
 
 class TokenManager:
     # ===== ROBUST AUTO-LOGIN CONSTANTS =====
-    TOKEN_CACHE_FILE = "/tmp/.fyers_token_cache.json" if os.environ.get("VERCEL") else ".fyers_token_cache.json"
+    TOKEN_CACHE_FILE = "/tmp/.fyers_token_cache.json" if any(os.environ.get(x) for x in ["VERCEL", "RENDER", "RAILWAY"]) else ".fyers_token_cache.json"
     LOGIN_COOLDOWN_SECONDS = 0  # No cooldown - login immediately when needed
     API_CALL_DELAY = 1  # 1 second between API calls during login (safe but fast)
     TOKEN_REFRESH_HOURS = 4  # Refresh token 4 hours before expiry
@@ -212,10 +212,26 @@ class TokenManager:
         print("\n" + "="*50)
         print("🔐 FYERS AUTHENTICATION STATUS")
         print("="*50)
+        
+        # Deployment Environment
+        env_type = "Local"
+        if os.environ.get("RENDER"): env_type = "Render (Cloud)"
+        elif os.environ.get("VERCEL"): env_type = "Vercel (Cloud)"
+        elif os.environ.get("RAILWAY_STATIC_URL"): env_type = "Railway (Cloud)"
+        print(f"  🌐 Environment: {env_type}")
+        
         print(f"  📋 Fyers ID: {diag['fyers_id'] or '❌ Not Set'}")
         print(f"  🔑 Access Token: {'✅ Present' if diag['has_access_token'] else '❌ Missing'}")
         print(f"  🔄 Refresh Token: {'✅ Present' if diag['has_refresh_token'] else '❌ Missing'}")
         print(f"  🤖 Headless Creds: {'✅ Complete' if diag['has_headless_creds'] else '❌ Incomplete'}")
+        
+        if not diag['has_headless_creds']:
+            missing = []
+            if not self.fyers_id: missing.append("FYERS_ID")
+            if not self.pin: missing.append("FYERS_PIN")
+            if not self.totp_key: missing.append("FYERS_TOTP_KEY")
+            if missing:
+                print(f"     ⚠️ Missing: {', '.join(missing)}")
         
         if diag['expires_in_hours'] is not None:
             if diag['expires_in_hours'] > 0:
@@ -239,8 +255,18 @@ class TokenManager:
         cls._last_login_attempt = time.time()
         
         tm = cls()
-        if not all([tm.fyers_id, tm.pin, tm.totp_key, tm.app_id, tm.secret_key]):
-            return {"success": False, "message": "Missing Credentials in .env"}
+        missing = []
+        if not tm.fyers_id: missing.append("FYERS_ID")
+        if not tm.pin: missing.append("FYERS_PIN")
+        if not tm.totp_key: missing.append("FYERS_TOTP_KEY")
+        if not tm.app_id: missing.append("FYERS_APP_ID")
+        if not tm.secret_key: missing.append("FYERS_SECRET_ID")
+        
+        if missing:
+            msg = f"Missing Environment Variables: {', '.join(missing)}"
+            if os.environ.get("RENDER") or os.environ.get("RAILWAY_STATIC_URL"):
+                msg += " (Check your Cloud Dashboard Settings -> Environment)"
+            return {"success": False, "message": msg}
             
         print("🚀 Starting Fully Autonomous Login Flow (with rate limiting)...")
         
