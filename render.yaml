@@ -22,4 +22,6 @@ services:
         sync: false
       - key: PORT
         value: 5055
+      - key: ON_DEMAND_MODE
+        value: "true"
     plan: free
