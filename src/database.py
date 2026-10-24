@@ -356,6 +356,20 @@ class UnifiedOrderManager:
                 row["payload"] = {}
         return rows
 
+    def get_strategy_event(self, event_id):
+        """Return one journal event with its decoded audit payload."""
+        with sqlite3.connect(self.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM strategy_events WHERE id = ?", (event_id,)).fetchone()
+        if not row:
+            return None
+        event = dict(row)
+        try:
+            event["payload"] = json.loads(event.get("payload") or "{}")
+        except (TypeError, ValueError):
+            event["payload"] = {}
+        return event
+
     def save_simulation(self, simulation_id, basket_id, entry_at, exit_at,
                         quantity_multiplier, input_data, result_data):
         created_at = datetime.now(TIMEZONE).isoformat()

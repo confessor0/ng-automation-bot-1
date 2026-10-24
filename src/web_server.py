@@ -1677,7 +1677,6 @@ def scan_strategy_history():
 
 
 def _parse_simulation_time(value, field_name):
-    from datetime import timezone
     if not value:
         raise ValueError(f"{field_name} is required")
     raw = str(value).replace("Z", "+00:00")
@@ -1685,7 +1684,70 @@ def _parse_simulation_time(value, field_name):
         parsed = datetime.fromisoformat(raw)
     except ValueError as exc:
         raise ValueError(f"{field_name} must be ISO date/time") from exc
+    # datetime-local values have no offset. They are entered and displayed as IST.
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=TIMEZONE)
     return parsed, parsed.isoformat()
+
+
+def _simulation_payoff_profile(legs, underlying_price, lot_size, charges):
+    """Build an expiry payoff range from explicitly described option/future legs."""
+    try:
+        reference = float(underlying_price)
+    except (TypeError, ValueError):
+        return [], None, None, []
+    if reference <= 0:
+        return [], None, None, []
+
+    from src.instrument_config import get_instrument_config
+    interval = float(get_instrument_config("NATGASMINI").get("strike_interval", 5))
+    points = sorted({max(interval, round((reference * (1 + shift)) / interval) * interval)
+                     for shift in (-.30, -.20, -.15, -.10, -.05, 0, .05, .10, .15, .20, .30)})
+    profile = []
+    for price in points:
+        pnl = 0.0
+        for leg in legs:
+            side = 1 if leg["side"] == "BUY" else -1
+            qty = float(leg["qty"])
+            instrument = str(leg.get("instrument") or "").upper()
+            option_type = str(leg.get("option_type") or "").upper()
+            strike = leg.get("strike")
+            entry = float(leg["entry_price"])
+            if instrument == "FUT":
+                pnl += (price - entry) * qty * lot_size * side
+            elif option_type in ("CE", "PE") and strike is not None:
+                intrinsic = max(price - float(strike), 0) if option_type == "CE" else max(float(strike) - price, 0)
+                pnl += (intrinsic - entry) * qty * lot_size * side
+        profile.append({"underlying_price": round(price, 2), "pnl": round(pnl - charges, 2)})
+
+    break_evens = []
+    for left, right in zip(profile, profile[1:]):
+        if left["pnl"] == 0:
+            break_evens.append(left["underlying_price"])
+        elif (left["pnl"] < 0 < right["pnl"]) or (right["pnl"] < 0 < left["pnl"]):
+            span = right["pnl"] - left["pnl"]
+            if span:
+                value = left["underlying_price"] + (0 - left["pnl"]) * (right["underlying_price"] - left["underlying_price"]) / span
+                break_evens.append(round(value, 2))
+    return profile, min(point["pnl"] for point in profile), max(point["pnl"] for point in profile), sorted(set(break_evens))
+
+
+def _simulation_risk_warnings(legs):
+    warnings = []
+    shorts = [leg for leg in legs if leg["side"] == "SELL" and str(leg.get("option_type") or "").upper() in ("CE", "PE")]
+    for short in shorts:
+        option_type = str(short.get("option_type")).upper()
+        strike = short.get("strike")
+        protected = any(
+            leg["side"] == "BUY" and str(leg.get("option_type") or "").upper() == option_type
+            and leg.get("strike") is not None and strike is not None
+            and ((option_type == "CE" and float(leg["strike"]) > float(strike))
+                 or (option_type == "PE" and float(leg["strike"]) < float(strike)))
+            for leg in legs
+        )
+        if not protected:
+            warnings.append(f"{option_type} short at {strike or 'unknown strike'} has no detected protective wing.")
+    return warnings
 
 
 @app.route('/api/simulations', methods=['GET'])
@@ -1697,6 +1759,69 @@ def list_simulations():
         basket_id=request.args.get('basket_id'),
     )
     return jsonify({"simulations": rows, "count": len(rows)})
+
+
+@app.route('/api/simulations/plan/<int:event_id>', methods=['GET'])
+@login_required
+def get_signal_simulation_plan(event_id):
+    """Build the exact strategy template for a saved signal without trading."""
+    from src.database import UnifiedOrderManager
+    from src.utils import construct_symbol
+    from src.adaptive_strategy import build_recommendation
+    from src.instrument_config import get_instrument_config
+
+    event = UnifiedOrderManager.get_instance().get_strategy_event(event_id)
+    if not event:
+        return jsonify({"status": "error", "message": "Journal event not found"}), 404
+    if event.get("event_type") not in ("HISTORICAL_SIGNAL", "HISTORICAL_TREND_CHANGE"):
+        return jsonify({"status": "error", "message": "Only saved strategy signals can be simulated"}), 400
+
+    payload = event.get("payload") or {}
+    details = payload.get("details") or {}
+    symbol = str(event.get("symbol") or "NATGASMINI").upper()
+    expiry = str(event.get("expiry") or payload.get("expiry") or "").upper()
+    atm = event.get("atm_strike") or payload.get("atm_strike")
+    cmp = event.get("market_price") or details.get("futures_close")
+    try:
+        atm, cmp = int(float(atm)), float(cmp)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "This signal is missing its ATM strike or futures price"}), 400
+
+    prices = {
+        (payload.get("symbols") or {}).get("fut"): details.get("futures_close", cmp),
+        (payload.get("symbols") or {}).get("ce"): details.get("ce_close", 0),
+        (payload.get("symbols") or {}).get("pe"): details.get("pe_close", 0),
+    }
+    def quote(trading_symbol):
+        try:
+            return float(prices.get(trading_symbol) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def make_symbol(base, kind, item_expiry, strike, option_type):
+        return construct_symbol(base, kind, item_expiry, strike, option_type)
+
+    recommendation = build_recommendation(
+        trend=event.get("trend") or "NEUTRAL",
+        signal_status=event.get("signal_status") or details.get("signal_status") or "HISTORICAL_SIGNAL",
+        cmp=cmp, atm_strike=atm, expiry=expiry,
+        option_interval=get_instrument_config(symbol).get("strike_interval", 5),
+        quote=quote, symbol_builder=make_symbol,
+        futures_confirmation=event.get("futures_confirmation") or details.get("futures_confirmation") or "UNKNOWN",
+        consolidation=(event.get("trend") == "NEUTRAL"),
+    )
+    for leg in recommendation.get("legs", []):
+        if leg.get("instrument") == "FUT":
+            leg["premium"] = cmp
+        leg["data_quality"] = "HISTORICAL_CLOSE" if leg.get("premium") else "MANUAL_PRICE_REQUIRED"
+    return jsonify({
+        "status": "success", "source_event": {
+            "id": event["id"], "candle_at": event.get("candle_at"), "trend": event.get("trend"),
+            "signal_status": event.get("signal_status"), "expiry": expiry, "atm_strike": atm,
+        },
+        "symbol": symbol, "lot_size": get_instrument_config(symbol).get("lot_size", 1),
+        "recommendation": recommendation,
+    })
 
 
 @app.route('/api/simulations', methods=['POST'])
@@ -1744,8 +1869,17 @@ def run_simulation():
     entry_prices = data.get("entry_prices") or {}
     exit_prices = data.get("exit_prices") or {}
     quantity_overrides = data.get("quantities") or {}
+    charges_input = data.get("charges") or {}
+    try:
+        brokerage_per_quantity = max(0.0, float(charges_input.get("brokerage_per_quantity", 0)))
+        tax_percent = max(0.0, float(charges_input.get("tax_percent", 0)))
+        slippage_percent = max(0.0, float(charges_input.get("slippage_percent", 0)))
+        margin_rate = max(0.0, float(charges_input.get("margin_rate", 12)))
+        capital_available = float(data.get("capital_available") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Charges, margin rate, and capital must be numeric"}), 400
     simulated_legs, errors = [], []
-    total_pnl = total_entry_value = total_exit_value = 0.0
+    total_pnl = total_entry_value = total_exit_value = total_turnover = total_brokerage = 0.0
 
     for index, leg in enumerate(raw_legs, 1):
         key = str(leg.get("seq", index))
@@ -1763,23 +1897,48 @@ def run_simulation():
             continue
 
         side = str(leg.get("side") or leg.get("action") or "BUY").upper()
+        if side not in ("BUY", "SELL"):
+            errors.append(f"Leg {key} ({symbol}) must have BUY or SELL side")
+            continue
         direction = 1 if side == "BUY" else -1
-        entry_value = entry_price * qty * lot_size
-        exit_value = exit_price * qty * lot_size
-        pnl = (exit_price - entry_price) * qty * lot_size * direction
+        # Slippage always worsens the assumed fill: buys pay more on entry and
+        # receive less on exit; sells receive less on entry and pay more on exit.
+        slip = slippage_percent / 100
+        adjusted_entry = entry_price * (1 + slip if side == "BUY" else 1 - slip)
+        adjusted_exit = exit_price * (1 - slip if side == "BUY" else 1 + slip)
+        entry_value = adjusted_entry * qty * lot_size
+        exit_value = adjusted_exit * qty * lot_size
+        pnl = (adjusted_exit - adjusted_entry) * qty * lot_size * direction
+        brokerage = brokerage_per_quantity * qty
         total_entry_value += entry_value if side == "BUY" else -entry_value
         total_exit_value += exit_value if side == "BUY" else -exit_value
         total_pnl += pnl
+        total_turnover += abs(entry_value) + abs(exit_value)
+        total_brokerage += brokerage
         simulated_legs.append({
             "seq": leg.get("seq", index), "symbol": symbol, "side": side,
-            "qty": qty, "entry_price": entry_price, "exit_price": exit_price,
+            "instrument": str(leg.get("instrument") or leg.get("leg_type") or "OPT").upper(),
+            "option_type": str(leg.get("option_type") or "").upper() or None,
+            "strike": leg.get("strike"), "qty": qty,
+            "entry_price": entry_price, "exit_price": exit_price,
+            "adjusted_entry_price": round(adjusted_entry, 4), "adjusted_exit_price": round(adjusted_exit, 4),
             "entry_value": round(entry_value, 2), "exit_value": round(exit_value, 2),
-            "pnl": round(pnl, 2), "holding_hours": round((exit_dt - entry_dt).total_seconds() / 3600, 4),
+            "gross_pnl": round(pnl, 2), "brokerage": round(brokerage, 2),
+            "pnl": round(pnl - brokerage, 2), "holding_hours": round((exit_dt - entry_dt).total_seconds() / 3600, 4),
         })
 
     if errors:
         return jsonify({"status": "error", "message": "Missing simulator inputs", "errors": errors}), 400
 
+    taxes = total_turnover * (tax_percent / 100)
+    net_pnl = total_pnl - total_brokerage - taxes
+    margin_notional = sum(abs(leg["entry_value"]) for leg in simulated_legs)
+    estimated_margin = margin_notional * (margin_rate / 100)
+    risk_warnings = _simulation_risk_warnings(simulated_legs)
+    payoff_profile, max_loss, max_profit, break_evens = _simulation_payoff_profile(
+        simulated_legs, data.get("underlying_price") or data.get("atm_strike") or data.get("market_price"),
+        lot_size, total_brokerage + taxes,
+    )
     result = {
         "status": "COMPLETED", "basket_id": basket_id,
         "entry_at": entry_at, "exit_at": exit_at,
@@ -1787,10 +1946,21 @@ def run_simulation():
         "entry_hour": entry_dt.strftime("%H:%M"), "exit_hour": exit_dt.strftime("%H:%M"),
         "holding_hours": round((exit_dt - entry_dt).total_seconds() / 3600, 4),
         "lot_size": lot_size, "quantity_multiplier": multiplier,
-        "legs": simulated_legs, "total_pnl": round(total_pnl, 2),
+        "strategy": data.get("strategy"), "source_event_id": data.get("source_event_id"),
+        "data_quality": data.get("data_quality", "MANUAL_ASSUMPTION"),
+        "exit_reason": data.get("exit_reason", "CUSTOM_EXIT"),
+        "legs": simulated_legs, "gross_pnl": round(total_pnl, 2),
+        "brokerage": round(total_brokerage, 2), "taxes": round(taxes, 2),
+        "total_charges": round(total_brokerage + taxes, 2), "total_pnl": round(net_pnl, 2),
         "net_entry_value": round(total_entry_value, 2),
         "net_exit_value": round(total_exit_value, 2),
-        "return_on_entry_pct": round((total_pnl / abs(total_entry_value) * 100), 4) if total_entry_value else None,
+        "estimated_margin": round(estimated_margin, 2), "capital_available": capital_available or None,
+        "capital_shortfall": round(max(0, estimated_margin - capital_available), 2) if capital_available else None,
+        "return_on_entry_pct": round((net_pnl / abs(total_entry_value) * 100), 4) if total_entry_value else None,
+        "return_on_capital_pct": round((net_pnl / estimated_margin * 100), 4) if estimated_margin else None,
+        "payoff_profile": payoff_profile, "max_loss_estimate": max_loss,
+        "max_profit_estimate": max_profit, "break_evens": break_evens,
+        "risk_warnings": risk_warnings,
     }
     simulation_id = "SIM_" + uuid.uuid4().hex[:12].upper()
     db.save_simulation(simulation_id, basket_id, entry_at, exit_at, multiplier, data, result)
@@ -1798,7 +1968,8 @@ def run_simulation():
     record_strategy_event("SIMULATION_RUN", symbol_base, (basket or {}).get("direction"), {},
                           (basket or {}).get("expiry"), (basket or {}).get("atm_strike"),
                           None, {"simulation_id": simulation_id, "basket_id": basket_id,
-                                 "total_pnl": result["total_pnl"]})
+                                 "source_event_id": data.get("source_event_id"),
+                                 "total_pnl": result["total_pnl"], "data_quality": result["data_quality"]})
     return jsonify({"status": "success", "simulation": result})
 
 @app.route('/api/orders/action', methods=['POST'])

@@ -2561,9 +2561,8 @@
                     const detail = `CE ${d.ce_close ?? '-'} / MA9 ${d.ce_ma9 ?? '-'} · PE ${d.pe_close ?? '-'} / MA9 ${d.pe_ma9 ?? '-'} · FUT ${d.futures_close ?? e.market_price ?? '-'} / MA9 ${d.futures_ma9 ?? '-'}`;
                     const basket = p.basket || {};
                     const signalLabel = e.signal_status === 'PAIRED_BULLISH_CROSS' ? 'NEW BULLISH MA9 ALIGNMENT' : e.signal_status === 'PAIRED_BEARISH_CROSS' ? 'NEW BEARISH MA9 ALIGNMENT' : e.signal_status === 'TREND_CONTINUES_BULLISH' ? 'TREND CONTINUES BULLISH' : e.signal_status === 'TREND_CONTINUES_BEARISH' ? 'TREND CONTINUES BEARISH' : e.signal_status === 'NO_DIRECTIONAL_MA9_ALIGNMENT' ? 'NO DIRECTIONAL MA9 ALIGNMENT' : e.signal_status === 'CONFLICTING_FUTURES_CONFIRMATION' ? 'FUTURES CONTEXT ONLY' : (e.signal_status || '-');
-                    const simData = encodeURIComponent(JSON.stringify({symbol:e.symbol || 'NATGASMINI', trend:e.trend, expiry:e.expiry || p.expiry, symbols:p.symbols || {}, details:d, basket:basket}));
                     const candleDate = String(e.candle_at || p.date || '').slice(0, 10);
-                    return `<tr data-candle-date="${/^\d{4}-\d{2}-\d{2}$/.test(candleDate) ? candleDate : ''}" data-scan-id="${e.scan_id || p.scan_id || ''}" data-event-type="${e.event_type || ''}" title="${detail}"><td>${e.candle_at ? new Date(e.candle_at).toLocaleString('en-IN') : (p.date || '-')}</td><td>${e.occurred_at ? new Date(e.occurred_at).toLocaleString('en-IN') : '-'}</td><td style="font-family:monospace">${e.scan_id || p.scan_id || '-'}</td><td>${e.sequence_no || '-'}</td><td><span class="badge badge-neutral">${e.event_type}</span></td><td>${e.trend || '-'}</td><td>${e.raw_trend || p.raw_trend || '-'}</td><td>${signalLabel}</td><td>${e.futures_confirmation || d.futures_confirmation || '-'}</td><td><details><summary>View</summary><span style="color:#94a3b8">${detail}</span><br>ATM ${e.atm_strike ?? p.atm_strike ?? '-'} · ${e.expiry || p.expiry || '-'}<br><b>${basket.label || 'Basket'}:</b> ${basket.action || 'Review strategy basket'} <button class="btn btn-secondary" style="padding:2px 7px;font-size:10px" onclick="switchTab('master-console')">VIEW BASKETS</button> <button class="btn btn-primary" style="padding:2px 7px;font-size:10px" onclick="openSignalSimulator('${simData}')">SIMULATE</button></details></td></tr>`;
+                    return `<tr data-candle-date="${/^\d{4}-\d{2}-\d{2}$/.test(candleDate) ? candleDate : ''}" data-scan-id="${e.scan_id || p.scan_id || ''}" data-event-type="${e.event_type || ''}" title="${detail}"><td>${e.candle_at ? new Date(e.candle_at).toLocaleString('en-IN') : (p.date || '-')}</td><td>${e.occurred_at ? new Date(e.occurred_at).toLocaleString('en-IN') : '-'}</td><td style="font-family:monospace">${e.scan_id || p.scan_id || '-'}</td><td>${e.sequence_no || '-'}</td><td><span class="badge badge-neutral">${e.event_type}</span></td><td>${e.trend || '-'}</td><td>${e.raw_trend || p.raw_trend || '-'}</td><td>${signalLabel}</td><td>${e.futures_confirmation || d.futures_confirmation || '-'}</td><td><details><summary>View</summary><span style="color:#94a3b8">${detail}</span><br>ATM ${e.atm_strike ?? p.atm_strike ?? '-'} · ${e.expiry || p.expiry || '-'}<br><b>${basket.label || 'Basket'}:</b> ${basket.action || 'Review strategy basket'} <button class="btn btn-secondary" style="padding:2px 7px;font-size:10px" onclick="switchTab('master-console')">VIEW BASKETS</button> <button class="btn btn-primary" style="padding:2px 7px;font-size:10px" onclick="openSignalSimulator(${Number(e.id)})">SIMULATE</button></details></td></tr>`;
                     }).join('');
                     const journalWrap = body.closest('.journal-table-wrap');
                     if (journalWrap) journalWrap.scrollLeft = 0;
@@ -2725,77 +2724,52 @@
                 .then(r => r.json())
                 .then(basket => {
                     if (!basket || !basket.orders) throw new Error(basket.message || 'Basket unavailable');
-                    const now = new Date();
-                    const later = new Date(now.getTime() + 24 * 3600 * 1000);
-                    const iso = d => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0,16);
-                    const legs = basket.orders.map((o, i) => `
-                        <tr>
-                            <td>${o.seq || i + 1}</td><td>${o.symbol || '-'}</td><td>${o.side || '-'}</td>
-                            <td><input class="sim-entry" data-key="${o.seq || i + 1}" type="number" min="0" step="0.01" placeholder="Entry price"></td>
-                            <td><input class="sim-exit" data-key="${o.seq || i + 1}" type="number" min="0" step="0.01" placeholder="Exit price"></td>
-                            <td><input class="sim-qty" data-key="${o.seq || i + 1}" type="number" min="1" step="1" value="${o.qty || 1}"></td>
-                        </tr>`).join('');
-                    document.body.insertAdjacentHTML('beforeend', `
-                        <div id="simulatorModal" style="position:fixed;inset:0;background:rgba(2,6,23,.86);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;">
-                            <div class="card" style="width:min(1100px,96vw);max-height:92vh;overflow:auto;border:1px solid rgba(59,130,246,.5);">
-                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-                                    <div><div class="card-title">📊 Basket Simulator</div><div style="font-size:12px;color:#94a3b8;">${basketId} · Price based what-if. No Fyers order is placed.</div></div>
-                                    <button class="btn btn-secondary" onclick="closeSimulator()">CLOSE</button>
-                                </div>
-                                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
-                                    <label style="font-size:11px;color:#94a3b8;">ENTRY DATE / TIME<input id="simEntryAt" class="input-minimal" type="datetime-local" value="${iso(now)}" style="width:100%;margin-top:4px;"></label>
-                                    <label style="font-size:11px;color:#94a3b8;">EXIT DATE / TIME<input id="simExitAt" class="input-minimal" type="datetime-local" value="${iso(later)}" style="width:100%;margin-top:4px;"></label>
-                                    <label style="font-size:11px;color:#94a3b8;">QTY MULTIPLIER<input id="simMultiplier" class="input-minimal" type="number" min="0.01" step="0.01" value="1" style="width:100%;margin-top:4px;"></label>
-                                    <label style="font-size:11px;color:#94a3b8;">LOT SIZE<input id="simLotSize" class="input-minimal" type="number" min="1" step="1" value="250" style="width:100%;margin-top:4px;"></label>
-                                </div>
-                                <table style="font-size:12px;"><thead><tr><th>SEQ</th><th>SYMBOL</th><th>SIDE</th><th>ENTRY PRICE</th><th>EXIT PRICE</th><th>QTY</th></tr></thead><tbody>${legs}</tbody></table>
-                                <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;"><button class="btn btn-primary" onclick="runBasketSimulation('${basketId}')">▶ RUN & SAVE SIMULATION</button></div>
-                                <div id="simulatorResult" style="margin-top:14px;"></div>
-                            </div>
-                        </div>`);
+                    openSimulationModal({
+                        basketId, symbol: 'NATGASMINI', strategy: basket.strategy_name || 'BASKET',
+                        lotSize: 1250, dataQuality: 'MANUAL_ASSUMPTION',
+                        legs: basket.orders.map((o, i) => ({ ...o, seq:o.seq || i + 1,
+                            instrument: o.leg_type || (/FUT/i.test(o.symbol || '') ? 'FUT' : 'OPT') }))
+                    });
                 }).catch(err => alert('Simulator error: ' + err.message));
         }
 
-        function runBasketSimulation(basketId) {
+        function simulationIso(d) { return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); }
+        function simulationNumber(value, fallback=0) { const x = Number(value); return Number.isFinite(x) ? x : fallback; }
+        function simulationMoney(value) { return '₹' + simulationNumber(value).toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2}); }
+
+        function openSimulationModal(plan) {
+            closeSimulator();
+            window.activeSimulationPlan = plan;
+            const now = new Date(), later = new Date(now.getTime() + 24 * 3600 * 1000);
+            const legs = (plan.legs || []).map((leg, i) => ({ ...leg, seq: leg.seq || i + 1 }));
+            const rows = legs.map(leg => {
+                const price = simulationNumber(leg.premium ?? leg.fill_price ?? leg.ltp, 0);
+                return `<tr><td>${leg.seq}</td><td>${leg.symbol || '-'}</td><td>${leg.side || leg.action || '-'}</td><td>${leg.instrument || 'OPT'} ${leg.strike || ''} ${leg.option_type || ''}</td><td><input class="sim-entry" data-key="${leg.seq}" type="number" min="0" step=".01" value="${price}"></td><td><input class="sim-exit" data-key="${leg.seq}" type="number" min="0" step=".01" value="${price}"></td><td><input class="sim-qty" data-key="${leg.seq}" type="number" min="1" step="1" value="${leg.qty || 1}"></td></tr>`;
+            }).join('');
+            document.body.insertAdjacentHTML('beforeend', `<div id="simulatorModal" style="position:fixed;inset:0;background:rgba(2,6,23,.88);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px"><div class="card" style="width:min(1180px,96vw);max-height:92vh;overflow:auto;border:1px solid rgba(59,130,246,.5)"><div style="display:flex;justify-content:space-between;gap:14px;align-items:start;margin-bottom:14px"><div><div class="card-title">📊 Strategy Basket Simulator</div><div style="font-size:12px;color:#94a3b8">${plan.strategy || 'Basket'} · ${plan.sourceEventId ? 'Historical confirmed signal' : plan.basketId || 'Active basket'} · simulations never place orders</div></div><button class="btn btn-secondary" onclick="closeSimulator()">CLOSE</button></div><div style="font-size:11px;color:${plan.dataQuality === 'HISTORICAL_CLOSE' ? '#10b981' : '#fbbf24'};margin-bottom:12px">DATA QUALITY: ${plan.dataQuality || 'MANUAL_ASSUMPTION'} · Confirm all editable prices before relying on this result.</div><div style="display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:10px;margin-bottom:10px"><label>ENTRY (IST)<input id="simEntryAt" class="input-minimal" type="datetime-local" value="${simulationIso(now)}"></label><label>EXIT (IST)<input id="simExitAt" class="input-minimal" type="datetime-local" value="${simulationIso(later)}"></label><label>QUANTITY MULTIPLIER<input id="simMultiplier" class="input-minimal" type="number" min=".01" step=".01" value="1"></label><label>LOT SIZE<input id="simLotSize" class="input-minimal" type="number" min="1" step="1" value="${plan.lotSize || 1250}"></label><label>UNDERLYING / ATM<input id="simUnderlying" class="input-minimal" type="number" min="0" step=".01" value="${plan.underlyingPrice || plan.atmStrike || ''}"></label><label>CAPITAL AVAILABLE<input id="simCapital" class="input-minimal" type="number" min="0" step="1" placeholder="Optional"></label><label>EXIT RULE<select id="simExitReason" class="input-minimal"><option value="CUSTOM_EXIT">Custom exit</option><option value="FIXED_HOLDING">Fixed holding period</option><option value="TARGET">Target reached</option><option value="STOP_LOSS">Stop loss</option><option value="OPPOSITE_CONFIRMED_TREND">Opposite confirmed trend</option><option value="EXPIRY">Expiry</option></select></label><label>MARGIN RATE %<input id="simMarginRate" class="input-minimal" type="number" min="0" step=".1" value="12"></label></div><details style="margin:10px 0"><summary style="cursor:pointer;color:#93c5fd">Costs and fill assumptions</summary><div style="display:grid;grid-template-columns:repeat(3,minmax(150px,1fr));gap:10px;margin-top:8px"><label>BROKERAGE / QTY<input id="simBrokerage" class="input-minimal" type="number" min="0" step=".01" value="0"></label><label>TAXES % OF TURNOVER<input id="simTax" class="input-minimal" type="number" min="0" step=".001" value="0"></label><label>SLIPPAGE % PER FILL<input id="simSlippage" class="input-minimal" type="number" min="0" step=".01" value="0"></label></div></details><div class="journal-table-wrap"><table class="journal-table"><thead><tr><th>#</th><th>CONTRACT</th><th>SIDE</th><th>TYPE</th><th>ENTRY</th><th>EXIT</th><th>QTY</th></tr></thead><tbody>${rows}</tbody></table></div><div style="display:flex;justify-content:flex-end;margin-top:16px"><button class="btn btn-primary" onclick="runBasketSimulation()">▶ RUN &amp; SAVE SIMULATION</button></div><div id="simulatorResult" style="margin-top:14px"></div></div></div>`);
+        }
+
+        function runBasketSimulation() {
+            const plan = window.activeSimulationPlan || {};
             const entries = {}, exits = {}, quantities = {};
             document.querySelectorAll('.sim-entry').forEach(el => entries[el.dataset.key] = el.value);
             document.querySelectorAll('.sim-exit').forEach(el => exits[el.dataset.key] = el.value);
             document.querySelectorAll('.sim-qty').forEach(el => quantities[el.dataset.key] = el.value);
-            fetch('/api/simulations', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
-                basket_id:basketId, entry_at:document.getElementById('simEntryAt').value,
-                exit_at:document.getElementById('simExitAt').value,
-                quantity_multiplier:document.getElementById('simMultiplier').value,
-                lot_size:document.getElementById('simLotSize').value,
-                entry_prices:entries, exit_prices:exits, quantities:quantities
-            })}).then(r=>r.json()).then(data => {
-                const out = document.getElementById('simulatorResult');
-                if (!data.simulation) { out.innerHTML = `<div style="color:#f87171">${data.message || 'Simulation failed'}${data.errors ? '<br>'+data.errors.join('<br>') : ''}</div>`; return; }
-                const s = data.simulation;
-                out.innerHTML = `<div style="padding:14px;border:1px solid ${s.total_pnl >= 0 ? '#10b981' : '#ef4444'}66;border-radius:8px;background:rgba(15,23,42,.7);"><b>Simulation saved: ${s.simulation_id}</b><br><span style="font-size:20px;color:${s.total_pnl >= 0 ? '#10b981' : '#f87171'}">Net P&amp;L: ₹${s.total_pnl.toFixed(2)}</span><br><span style="color:#94a3b8">${s.entry_day} ${s.entry_hour} → ${s.exit_day} ${s.exit_hour} · ${s.holding_hours} hours · Return ${s.return_on_entry_pct ?? '-'}%</span></div>`;
+            const legs = (plan.legs || []).map((leg, i) => ({...leg, seq:leg.seq || i + 1, side:leg.side || leg.action || 'BUY'}));
+            fetch('/api/simulations', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({basket_id:plan.basketId, source_event_id:plan.sourceEventId, strategy:plan.strategy, symbol:plan.symbol || 'NATGASMINI', entry_at:document.getElementById('simEntryAt').value, exit_at:document.getElementById('simExitAt').value, quantity_multiplier:document.getElementById('simMultiplier').value, lot_size:document.getElementById('simLotSize').value, underlying_price:document.getElementById('simUnderlying').value, capital_available:document.getElementById('simCapital').value, exit_reason:document.getElementById('simExitReason').value, data_quality:plan.dataQuality || 'MANUAL_ASSUMPTION', legs, entry_prices:entries, exit_prices:exits, quantities, charges:{brokerage_per_quantity:document.getElementById('simBrokerage').value, tax_percent:document.getElementById('simTax').value, slippage_percent:document.getElementById('simSlippage').value, margin_rate:document.getElementById('simMarginRate').value}})}).then(r=>r.json()).then(data => {
+                const out = document.getElementById('simulatorResult'); if (!data.simulation) { out.innerHTML = `<div style="color:#f87171">${data.message || 'Simulation failed'}${data.errors ? '<br>' + data.errors.join('<br>') : ''}</div>`; return; }
+                const s = data.simulation, color = s.total_pnl >= 0 ? '#10b981' : '#f87171';
+                const warnings = (s.risk_warnings || []).map(x => `<li>${x}</li>`).join('');
+                const points = (s.payoff_profile || []).map(p => `<span style="display:inline-block;margin:2px 6px 2px 0;color:${p.pnl >= 0 ? '#10b981' : '#f87171'}">${p.underlying_price}: ${simulationMoney(p.pnl)}</span>`).join('');
+                out.innerHTML = `<div style="padding:14px;border:1px solid ${color}66;border-radius:8px;background:rgba(15,23,42,.7)"><div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap"><b>Saved simulation: ${s.simulation_id}</b><b style="font-size:20px;color:${color}">Net P&amp;L ${simulationMoney(s.total_pnl)}</b></div><div style="display:grid;grid-template-columns:repeat(4,minmax(130px,1fr));gap:8px;margin-top:12px;font-size:12px"><span>Gross: ${simulationMoney(s.gross_pnl)}</span><span>Charges: ${simulationMoney(s.total_charges)}</span><span>Est. margin: ${simulationMoney(s.estimated_margin)}</span><span>Return on capital: ${s.return_on_capital_pct ?? '-'}%</span><span>Max loss estimate: ${s.max_loss_estimate == null ? '-' : simulationMoney(s.max_loss_estimate)}</span><span>Max profit estimate: ${s.max_profit_estimate == null ? '-' : simulationMoney(s.max_profit_estimate)}</span><span>Break-evens: ${(s.break_evens || []).join(', ') || '-'}</span><span>${s.entry_day} → ${s.exit_day} · ${s.holding_hours}h</span></div>${s.capital_shortfall ? `<div style="color:#fbbf24;margin-top:8px">Capital shortfall estimate: ${simulationMoney(s.capital_shortfall)}</div>` : ''}${warnings ? `<ul style="color:#fbbf24;margin:8px 0">${warnings}</ul>` : ''}<details style="margin-top:8px"><summary>Expiry payoff range</summary><div style="margin-top:6px">${points || 'Provide underlying / ATM price to calculate payoff.'}</div></details></div>`;
             }).catch(err => alert('Simulation error: ' + err.message));
         }
 
-        function openSignalSimulator(encoded) {
-            const plan = JSON.parse(decodeURIComponent(encoded));
-            const d = plan.details || {};
-            const legs = [
-                {key:'fut', symbol:plan.symbols?.fut || 'FUTURES', side:plan.trend === 'BULLISH' ? 'BUY' : 'SELL', price:d.futures_close || 0},
-                {key:'ce', symbol:plan.symbols?.ce || 'ATM CE', side:'SELL', price:d.ce_close || 0},
-                {key:'pe', symbol:plan.symbols?.pe || 'ATM PE', side:'SELL', price:d.pe_close || 0}
-            ];
-            const now = new Date(), later = new Date(now.getTime() + 24*3600*1000);
-            const iso = x => new Date(x.getTime() - x.getTimezoneOffset()*60000).toISOString().slice(0,16);
-            const legPayload = encodeURIComponent(JSON.stringify(legs));
-            document.body.insertAdjacentHTML('beforeend', `<div id="signalSimulatorModal" style="position:fixed;inset:0;background:rgba(2,6,23,.86);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px"><div class="card" style="width:min(900px,96vw);max-height:90vh;overflow:auto"><div style="display:flex;justify-content:space-between"><div><div class="card-title">📊 Signal Basket Simulator</div><div style="font-size:12px;color:#94a3b8">${plan.trend || 'NEUTRAL'} · ${plan.basket?.label || 'Strategy basket'} · no live order</div></div><button class="btn btn-secondary" onclick="document.getElementById('signalSimulatorModal').remove()">CLOSE</button></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><label>ENTRY (IST)<input id="sigSimEntry" class="input-minimal" type="datetime-local" value="${iso(now)}" style="width:100%"></label><label>EXIT (IST)<input id="sigSimExit" class="input-minimal" type="datetime-local" value="${iso(later)}" style="width:100%"></label></div><table class="journal-table"><thead><tr><th>SYMBOL</th><th>SIDE</th><th>ENTRY</th><th>EXIT</th><th>QTY</th></tr></thead><tbody>${legs.map((l,i)=>`<tr><td>${l.symbol}</td><td>${l.side}</td><td><input class="sigSimEntry" data-key="${i}" type="number" step=".01" value="${l.price}"></td><td><input class="sigSimExit" data-key="${i}" type="number" step=".01" value="${l.price}"></td><td><input class="sigSimQty" data-key="${i}" type="number" min="1" value="1"></td></tr>`).join('')}</tbody></table><div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="btn btn-primary" onclick="runSignalSimulation('${legPayload}')">RUN & SAVE SIMULATION</button></div><div id="sigSimResult" style="margin-top:12px"></div></div></div>`);
-        }
-
-        function runSignalSimulation(encodedLegs) {
-            const legs = JSON.parse(decodeURIComponent(encodedLegs));
-            const entries={}, exits={}, quantities={};
-            document.querySelectorAll('.sigSimEntry').forEach(x=>entries[x.dataset.key]=x.value);
-            document.querySelectorAll('.sigSimExit').forEach(x=>exits[x.dataset.key]=x.value);
-            document.querySelectorAll('.sigSimQty').forEach(x=>quantities[x.dataset.key]=x.value);
-            fetch('/api/simulations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:'NATGASMINI',entry_at:document.getElementById('sigSimEntry').value,exit_at:document.getElementById('sigSimExit').value,lot_size:1250,legs:legs.map((l,i)=>({seq:i+1,symbol:l.symbol,side:l.side,qty:quantities[i] || 1})),entry_prices:entries,exit_prices:exits,quantities:quantities})}).then(r=>r.json()).then(x=>{const s=x.simulation, out=document.getElementById('sigSimResult'); out.innerHTML=s?`<div style="color:${s.total_pnl>=0?'#10b981':'#f87171'};font-weight:700">Saved ${s.simulation_id} · Net P&amp;L ₹${s.total_pnl.toFixed(2)} · ${s.holding_hours} hours</div>`:`<div style="color:#f87171">${x.message||'Simulation failed'}</div>`;}).catch(e=>alert(e.message));
+        function openSignalSimulator(eventId) {
+            fetch('/api/simulations/plan/' + encodeURIComponent(eventId)).then(r => r.json()).then(data => {
+                if (!data.recommendation) throw new Error(data.message || 'Signal plan unavailable');
+                openSimulationModal({basketId:null, sourceEventId:data.source_event.id, symbol:data.symbol, lotSize:data.lot_size, strategy:data.recommendation.strategy_label, underlyingPrice:data.recommendation.market_context?.current_price, atmStrike:data.source_event.atm_strike, dataQuality:'HISTORICAL_CLOSE', legs:data.recommendation.legs});
+            }).catch(err => alert('Simulator error: ' + err.message));
         }
 
         function handleConsoleAction(basket_id, action) {
