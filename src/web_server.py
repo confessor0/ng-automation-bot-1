@@ -1767,6 +1767,16 @@ def list_simulations():
     return jsonify({"simulations": rows, "count": len(rows)})
 
 
+@app.route('/api/simulations/<simulation_id>', methods=['DELETE'])
+@login_required
+def delete_simulation(simulation_id):
+    from src.database import UnifiedOrderManager
+    deleted = UnifiedOrderManager.get_instance().delete_simulation(simulation_id)
+    if not deleted:
+        return jsonify({"status": "error", "message": "Simulation not found"}), 404
+    return jsonify({"status": "success", "simulation_id": simulation_id})
+
+
 @app.route('/api/simulations/plan/<int:event_id>', methods=['GET'])
 @login_required
 def get_signal_simulation_plan(event_id):
@@ -1816,10 +1826,28 @@ def get_signal_simulation_plan(event_id):
         futures_confirmation=event.get("futures_confirmation") or details.get("futures_confirmation") or "UNKNOWN",
         consolidation=(event.get("trend") == "NEUTRAL"),
     )
+    # Historical scans persist ATM CE/PE/FUT closes. Hedge-leg history was not
+    # part of the original scan payload, so use a read-only current quote as a
+    # clearly labelled fallback when a valid existing FYERS token is available.
+    try:
+        broker = ensure_broker_connected()
+        missing_symbols = [leg.get("symbol") for leg in recommendation.get("legs", [])
+                           if not leg.get("premium") and leg.get("symbol")]
+        live_quotes = broker.get_quotes(missing_symbols) if broker and missing_symbols else {}
+    except Exception:
+        live_quotes = {}
     for leg in recommendation.get("legs", []):
         if leg.get("instrument") == "FUT":
             leg["premium"] = cmp
-        leg["data_quality"] = "HISTORICAL_CLOSE" if leg.get("premium") else "MANUAL_PRICE_REQUIRED"
+        if not leg.get("premium"):
+            live_price = live_quotes.get(leg.get("symbol"))
+            if live_price:
+                leg["premium"] = round(float(live_price), 4)
+                leg["data_quality"] = "LIVE_LTP_ESTIMATE"
+            else:
+                leg["data_quality"] = "MANUAL_PRICE_REQUIRED"
+        else:
+            leg["data_quality"] = "HISTORICAL_CLOSE"
     return jsonify({
         "status": "success", "source_event": {
             "id": event["id"], "candle_at": event.get("candle_at"), "trend": event.get("trend"),

@@ -399,6 +399,13 @@ class UnifiedOrderManager:
             row["result_data"] = json.loads(row["result_data"] or "{}")
         return rows
 
+    def delete_simulation(self, simulation_id):
+        """Delete one saved simulation view by its immutable ID."""
+        with sqlite3.connect(self.DB_PATH) as conn:
+            cursor = conn.execute("DELETE FROM simulations WHERE simulation_id = ?", (simulation_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
     def save_scan_run(self, scan_id, symbol, days_requested, from_date,
                       to_date, status, summary):
         with sqlite3.connect(self.DB_PATH) as conn:
