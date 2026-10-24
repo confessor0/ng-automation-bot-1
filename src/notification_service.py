@@ -92,11 +92,13 @@ def send_mailjet_notification(subject, message, recipient=None):
 def process_due_trend_notification(state_manager):
     """Deliver a queued trend event once its configured delay has elapsed."""
     settings = state_manager.get_state().get("email_notification_config", {})
-    pending = settings.get("pending_event")
+    pending_key = next((key for key in ("pending_potential_event", "pending_confirmed_event", "pending_event")
+                        if settings.get(key)), None)
+    pending = settings.get(pending_key) if pending_key else None
     if not pending:
         return
     if not settings.get("enabled"):
-        settings.pop("pending_event", None)
+        settings.pop(pending_key, None)
         state_manager.update("email_notification_config", settings)
         provider_settings = load_provider_settings()
         provider_settings["notifications"] = settings
@@ -106,8 +108,8 @@ def process_due_trend_notification(state_manager):
         return
     if send_email_notification(pending.get("subject", "NG trend update"),
                                pending.get("message", ""), settings.get("recipient")):
-        settings["last_notified_trend"] = pending.get("trend")
-        settings.pop("pending_event", None)
+        settings[f"last_notified_{str(pending.get('kind', 'confirmed')).lower()}_trend"] = pending.get("trend")
+        settings.pop(pending_key, None)
         state_manager.update("email_notification_config", settings)
         provider_settings = load_provider_settings()
         provider_settings["notifications"] = settings

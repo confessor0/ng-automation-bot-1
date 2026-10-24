@@ -307,37 +307,70 @@ def refresh_market_data():
                     "pe_ma9": details.get("pe_ma9", 0)
                 }
                 print(f"✅ Trend Engine Updated: {trend}")
-                # Schedule one email for each selected trend transition.
+                # Completed daily CE/PE closes are the confirmed trend. During
+                # the session, compare live option quotes with those MA9 values
+                # separately so a possible reversal can be notified without
+                # changing the confirmed trend or basket.
                 mail_cfg = state_mgr.get_state().get("email_notification_config", {})
-                previous = mail_cfg.get("last_observed_trend", "NEUTRAL")
-                trend_option = {"BULLISH": "notify_bullish", "BEARISH": "notify_bearish",
-                                "NEUTRAL": "notify_neutral"}.get(trend)
-                changed = trend in ("BULLISH", "BEARISH", "NEUTRAL") and trend != previous
-                if changed:
+                import time
+                from src.notification_service import send_email_notification, load_provider_settings, save_provider_settings
+
+                def queue_trend_email(kind, observed_trend, subject, message):
+                    option = {"BULLISH": "notify_bullish", "BEARISH": "notify_bearish",
+                              "NEUTRAL": "notify_neutral"}.get(observed_trend)
+                    enabled_key = "notify_potential_trends" if kind == "POTENTIAL" else "notify_confirmed_trends"
+                    if not (mail_cfg.get("enabled") and mail_cfg.get("notify_trends", True) and
+                            mail_cfg.get(enabled_key, True) and option and
+                            mail_cfg.get(option, observed_trend != "NEUTRAL")):
+                        return
+                    pending_key = "pending_potential_event" if kind == "POTENTIAL" else "pending_confirmed_event"
+                    delay_seconds = (int(mail_cfg.get("delay_hours", 0)) * 3600 + int(mail_cfg.get("delay_minutes", 0)) * 60) \
+                        if mail_cfg.get("delivery_mode") == "custom_delay" else 0
+                    event = {"subject": subject, "message": message, "trend": observed_trend,
+                             "kind": kind, "due_at": time.time() + (delay_seconds or 60)}
+                    if delay_seconds:
+                        mail_cfg[pending_key] = event
+                    elif send_email_notification(subject, message, mail_cfg.get("recipient")):
+                        mail_cfg[f"last_notified_{kind.lower()}_trend"] = observed_trend
+                    else:
+                        mail_cfg[pending_key] = event
+
+                previous_confirmed = mail_cfg.get("last_observed_trend", "NEUTRAL")
+                if trend in ("BULLISH", "BEARISH", "NEUTRAL") and trend != previous_confirmed:
                     mail_cfg["last_observed_trend"] = trend
-                    mail_cfg.pop("pending_event", None)
-                    if (mail_cfg.get("enabled") and mail_cfg.get("notify_trends", True) and
-                            trend_option and mail_cfg.get(trend_option, trend != "NEUTRAL")):
-                        import time
-                        from src.notification_service import send_email_notification
-                        subject = f"NG trend changed to {trend}"
-                        message = f"Natural Gas trend: {trend}\nCE: {trend_data['ce_price']} (MA9 {trend_data['ce_ma9']})\nPE: {trend_data['pe_price']} (MA9 {trend_data['pe_ma9']})"
-                        delay_seconds = (int(mail_cfg.get("delay_hours", 0)) * 3600 +
-                                         int(mail_cfg.get("delay_minutes", 0)) * 60) if mail_cfg.get("delivery_mode") == "custom_delay" else 0
-                        if delay_seconds:
-                            mail_cfg["pending_event"] = {"subject": subject, "message": message,
-                                                          "trend": trend, "due_at": time.time() + delay_seconds}
-                        else:
-                            if send_email_notification(subject, message, mail_cfg.get("recipient")):
-                                mail_cfg["last_notified_trend"] = trend
-                            else:
-                                mail_cfg["pending_event"] = {"subject": subject, "message": message,
-                                                              "trend": trend, "due_at": time.time() + 60}
-                    state_mgr.update("email_notification_config", mail_cfg)
-                    from src.notification_service import load_provider_settings, save_provider_settings
-                    provider_settings = load_provider_settings()
-                    provider_settings["notifications"] = mail_cfg
-                    save_provider_settings(provider_settings)
+                    queue_trend_email("CONFIRMED", trend, f"NG confirmed trend: {trend}",
+                                      f"Confirmed at completed daily candle.\nNatural Gas trend: {trend}\n"
+                                      f"CE: {trend_data['ce_price']} (MA9 {trend_data['ce_ma9']})\n"
+                                      f"PE: {trend_data['pe_price']} (MA9 {trend_data['pe_ma9']})")
+                    record_strategy_event("CONFIRMED_TREND_CHANGE", symbol, trend, details, expiry, atm_strike, ltp,
+                                          {"previous_trend": previous_confirmed, "confirmation": "COMPLETED_DAILY_CANDLE"})
+
+                live_trend = None
+                if details.get("ce_symbol") and details.get("pe_symbol") and details.get("ce_ma9") and details.get("pe_ma9"):
+                    live_quotes = market_data._get_batch_ltp([details["ce_symbol"], details["pe_symbol"]])
+                    live_ce = float(live_quotes.get(details["ce_symbol"], 0) or 0)
+                    live_pe = float(live_quotes.get(details["pe_symbol"], 0) or 0)
+                    if live_ce < details["ce_ma9"] and live_pe > details["pe_ma9"]:
+                        live_trend = "BEARISH"
+                    elif live_ce > details["ce_ma9"] and live_pe < details["pe_ma9"]:
+                        live_trend = "BULLISH"
+                    elif live_ce < details["ce_ma9"] and live_pe < details["pe_ma9"]:
+                        live_trend = "NEUTRAL"
+                    if live_trend:
+                        previous_live = mail_cfg.get("last_observed_live_trend", trend)
+                        if live_trend != previous_live:
+                            mail_cfg["last_observed_live_trend"] = live_trend
+                            queue_trend_email("POTENTIAL", live_trend, f"NG potential intraday trend: {live_trend}",
+                                              f"Potential live change — NOT CONFIRMED until the daily candle closes.\n"
+                                              f"Natural Gas: {live_trend}\nLive CE: {live_ce:.2f} vs MA9 {details['ce_ma9']:.2f}\n"
+                                              f"Live PE: {live_pe:.2f} vs MA9 {details['pe_ma9']:.2f}")
+                            record_strategy_event("INTRADAY_TREND_CHANGE", symbol, trend, details, expiry, atm_strike, ltp,
+                                                  {"potential_trend": live_trend, "confirmed_trend": trend,
+                                                   "confirmation": "PENDING_DAILY_CLOSE", "live_ce": live_ce, "live_pe": live_pe})
+                state_mgr.update("email_notification_config", mail_cfg)
+                provider_settings = load_provider_settings()
+                provider_settings["notifications"] = mail_cfg
+                save_provider_settings(provider_settings)
 
                 # [NEW] Helper for Scenario Analysis (now uses instrument config)
                 from src.instrument_config import get_instrument_config, get_hedge_distance, get_wing_distance, get_scenario_moves
@@ -1962,6 +1995,8 @@ def admin_email_notifications():
                         "notify_bullish": cfg.get("notify_bullish", True),
                         "notify_bearish": cfg.get("notify_bearish", True),
                         "notify_neutral": cfg.get("notify_neutral", False),
+                        "notify_potential_trends": cfg.get("notify_potential_trends", True),
+                        "notify_confirmed_trends": cfg.get("notify_confirmed_trends", True),
                         "delivery_mode": cfg.get("delivery_mode", "immediate"),
                         "delay_hours": cfg.get("delay_hours", 0),
                         "delay_minutes": cfg.get("delay_minutes", 0),
@@ -2002,6 +2037,8 @@ def admin_email_notifications():
                 "notify_bullish": bool(data.get("notify_bullish", True)),
                 "notify_bearish": bool(data.get("notify_bearish", True)),
                 "notify_neutral": bool(data.get("notify_neutral")),
+                "notify_potential_trends": bool(data.get("notify_potential_trends", True)),
+                "notify_confirmed_trends": bool(data.get("notify_confirmed_trends", True)),
                 "delivery_mode": delivery_mode,
                 "delay_hours": delay_hours,
                 "delay_minutes": delay_minutes,

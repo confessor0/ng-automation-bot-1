@@ -1599,6 +1599,8 @@
                         </select>
                     </label>
                     <div style="font-size:12px;color:#94a3b8">Trend change alerts</div>
+                    <label><input type="checkbox" id="admNotifyPotential" checked> Potential intraday changes <span style="color:#fbbf24;font-size:11px">(not confirmed until daily close)</span></label>
+                    <label><input type="checkbox" id="admNotifyConfirmed" checked> Confirmed daily changes</label>
                     <label><input type="checkbox" id="admNotifyBullish" checked> Bullish</label>
                     <label><input type="checkbox" id="admNotifyBearish" checked> Bearish</label>
                     <label><input type="checkbox" id="admNotifyNeutral"> Neutral</label>
@@ -3219,6 +3221,8 @@
                 document.getElementById('admNotifyBullish').checked=v.notify_bullish!==false;
                 document.getElementById('admNotifyBearish').checked=v.notify_bearish!==false;
                 document.getElementById('admNotifyNeutral').checked=!!v.notify_neutral;
+                document.getElementById('admNotifyPotential').checked=v.notify_potential_trends!==false;
+                document.getElementById('admNotifyConfirmed').checked=v.notify_confirmed_trends!==false;
                 document.getElementById('admEmailTiming').value=v.delivery_mode||'immediate';
                 document.getElementById('admEmailDelayHours').value=v.delay_hours||0;
                 document.getElementById('admEmailDelayMinutes').value=v.delay_minutes||0;
@@ -3242,6 +3246,8 @@
                     notify_bullish:document.getElementById('admNotifyBullish').checked,
                     notify_bearish:document.getElementById('admNotifyBearish').checked,
                     notify_neutral:document.getElementById('admNotifyNeutral').checked,
+                    notify_potential_trends:document.getElementById('admNotifyPotential').checked,
+                    notify_confirmed_trends:document.getElementById('admNotifyConfirmed').checked,
                     delivery_mode:document.getElementById('admEmailTiming').value,
                     delay_hours:document.getElementById('admEmailDelayHours').value,
                     delay_minutes:document.getElementById('admEmailDelayMinutes').value,
