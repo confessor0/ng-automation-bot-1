@@ -104,7 +104,6 @@ def build_recommendation(
 
     if trend == "BULLISH":
         legs = [
-            _leg("BUY", "OPT", atm_strike, "PE", 12, pe_symbol, pe_premium),
             _leg("BUY", "FUT", None, None, 6),
             _leg("BUY", "OPT", atm_strike - (2 * option_interval), "CE", 6),
             _leg("SELL", "OPT", atm_strike, "CE", 4, ce_symbol, ce_premium),
