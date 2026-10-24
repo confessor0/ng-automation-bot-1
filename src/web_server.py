@@ -1348,7 +1348,9 @@ def scan_strategy_history():
         if not broker or not broker.fyers:
             return jsonify({"status": "error", "message": "Fyers is not connected"}), 503
 
-        expiry = get_next_expiry_symbol_suffix(symbol=symbol)
+        expiry = str(data.get("expiry") or "AUTO").upper()
+        if expiry in ("", "AUTO"):
+            expiry = get_next_expiry_symbol_suffix(symbol=symbol)
         fut_symbol = construct_symbol(symbol, "FUT", expiry)
         market_data = MarketDataEngine(broker, symbol_base=symbol)
         current_fut = market_data._get_ltp(fut_symbol)
@@ -1375,9 +1377,15 @@ def scan_strategy_history():
         dated = {name: by_date(frame) for name, frame in frames.items()}
         today_key = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
         common_dates = sorted((set(dated["fut"]) & set(dated["ce"]) & set(dated["pe"])) - {today_key})
+        history_quality = {
+            "futures_records": len(dated["fut"]), "ce_records": len(dated["ce"]),
+            "pe_records": len(dated["pe"]), "common_completed_records": len(common_dates),
+            "dropped_for_date_mismatch": max(0, len(set(dated["fut"]) | set(dated["ce"]) | set(dated["pe"])) - len(common_dates)),
+            "fallback_used": False, "completed_candles_only": True,
+        }
         if len(common_dates) < 10:
             summary = {"scan_id": scan_id, "status": "INSUFFICIENT_HISTORY",
-                       "records": len(common_dates), "required": 10}
+                       "records": len(common_dates), "required": 10, "data_quality": history_quality}
             db.save_scan_run(scan_id, symbol, days, common_dates[0] if common_dates else None,
                              common_dates[-1] if common_dates else None, "INSUFFICIENT_HISTORY", summary)
             return jsonify({"status": "error", "message": "At least 10 common completed daily records are required", "scan": summary}), 422
@@ -1445,9 +1453,15 @@ def scan_strategy_history():
                       "futures_close": round(fut_now, 4), "futures_ma9": round(fut_ma, 4),
                       "futures_confirmation": futures_confirmation,
                       "completed_candle_epoch": dated["fut"][day]["epoch"]}
+            basket = {"strategy": "STRATEGY_1" if trend in ("BULLISH", "BEARISH") else "STRATEGY_2",
+                      "label": "Trending Markets" if trend in ("BULLISH", "BEARISH") else "Consolidation Markets",
+                      "action": ("BUY FUTURES + BUY ITM HEDGE + SELL ATM CE/PE" if trend == "BULLISH" else
+                                 "SELL FUTURES + BUY ITM HEDGE + SELL ATM CE/PE" if trend == "BEARISH" else
+                                 "SELL ATM CE + SELL ATM PE + BUY PROTECTIVE WINGS"),
+                      "simulator_available": True}
             payload = {"scan_id": scan_id, "date": day, "previous_trend": previous_trend,
                        "trend_changed": changed, "expiry": expiry, "atm_strike": atm,
-                       "symbols": {"fut": fut_symbol, "ce": ce_symbol, "pe": pe_symbol}}
+                       "symbols": {"fut": fut_symbol, "ce": ce_symbol, "pe": pe_symbol}, "basket": basket}
             candle_at = datetime.fromtimestamp(dated["fut"][day]["epoch"], TIMEZONE).isoformat()
             sequence_no = len(records) + 1
             db.record_strategy_event("HISTORICAL_SIGNAL", symbol=symbol, trend=trend,
@@ -1473,7 +1487,8 @@ def scan_strategy_history():
             previous_trend = trend
 
         summary = {"scan_id": scan_id, "status": "COMPLETED", "symbol": symbol,
-                   "expiry": expiry, "atm_strike": atm, "records": len(records), **counts}
+                   "expiry": expiry, "atm_strike": atm, "records": len(records),
+                   "data_quality": history_quality, **counts}
         if records:
             latest = records[-1]
             state_mgr.update("trend", latest["trend"])

@@ -1389,6 +1389,20 @@
                 </table>
             </div>
 
+            <div class="card" style="margin-bottom:24px;border-color:rgba(96,165,250,.35);background:linear-gradient(135deg,rgba(30,41,59,.75),rgba(15,23,42,.7));">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:20px;flex-wrap:wrap;">
+                    <div><div style="font-size:11px;color:#64748b;text-transform:uppercase;font-weight:800;letter-spacing:.08em;">Current Decision</div><div id="journalDecisionTrend" style="font-size:30px;font-weight:800;color:#cbd5e1;margin-top:4px;">WAITING FOR SCAN</div><div id="journalDecisionReason" style="font-size:12px;color:#94a3b8;margin-top:6px;">Run a historical scan or refresh strategy data.</div></div>
+                    <div id="journalDecisionAction" class="badge badge-neutral" style="font-size:14px;padding:10px 14px;">WAIT / NO TRADE</div>
+                </div>
+                <div class="trend-summary-grid" style="margin-bottom:0;">
+                    <div class="trend-summary-item"><label>Persisted since</label><strong id="journalPersistedSince">-</strong></div>
+                    <div class="trend-summary-item"><label>Confidence</label><strong id="journalDecisionConfidence">-</strong></div>
+                    <div class="trend-summary-item"><label>Strategy basket</label><strong id="journalDecisionBasket">-</strong></div>
+                    <div class="trend-summary-item"><label>Latest confirmation</label><strong id="journalLatestConfirmation">-</strong></div>
+                    <div class="trend-summary-item"><label>Data quality</label><strong id="journalDataQuality">Waiting</strong></div>
+                </div>
+            </div>
+
             <!-- Summary Header -->
             <div class="card"
                 style="padding: 16px 24px; margin-bottom: 24px; background: rgba(30, 41, 59, 0.4); border-color: rgba(59, 130, 246, 0.3);">
@@ -1471,9 +1485,15 @@
             </div>
 
             <div class="card" style="margin-top:24px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:12px;flex-wrap:wrap;">
                     <div class="card-title" style="margin:0;">🧾 Strategy Event Journal</div>
-                    <div style="display:flex;gap:8px;"><button class="btn btn-primary" style="padding:5px 10px;font-size:11px;" onclick="runTwentyDayScan(this)">🔎 SCAN LAST 20 DAYS</button><button class="btn btn-secondary" style="padding:5px 10px;font-size:11px;" onclick="pollStrategyEvents();pollStrategyScans()">REFRESH</button></div>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <select id="journalSymbol" class="input-minimal" style="width:130px"><option value="NATGASMINI">NATGASMINI</option></select>
+                        <select id="journalDays" class="input-minimal" style="width:90px"><option value="5">5 days</option><option value="10">10 days</option><option value="20" selected>20 days</option><option value="60">60 days</option></select>
+                        <select id="journalExpiry" class="input-minimal" style="width:145px"><option value="AUTO">AUTO · latest shared</option><option value="26NOV">26NOV</option><option value="26DEC">26DEC</option><option value="27JAN">27JAN</option></select>
+                        <span title="Only completed daily candles are scanned" style="font-size:11px;color:#94a3b8;white-space:nowrap;">✓ COMPLETED CANDLES</span>
+                        <button class="btn btn-primary" style="padding:5px 10px;font-size:11px;" onclick="runTwentyDayScan(this)">🔎 RUN SCAN</button><button class="btn btn-secondary" style="padding:5px 10px;font-size:11px;" onclick="pollStrategyEvents();pollStrategyScans()">REFRESH</button>
+                    </div>
                 </div>
                 <div style="font-size:11px;color:#94a3b8;margin-bottom:10px;">Trend analyses, MA9 confirmations, trend changes, and saved simulations are recorded here.</div>
                 <div id="journalSummary" class="trend-summary-grid"></div>
@@ -2378,6 +2398,7 @@
                     if (!body) return;
                     const signals = (data.events || []).filter(e => e.event_type === 'HISTORICAL_SIGNAL');
                     const latest = signals[0];
+                    const latestChange = (data.events || []).find(e => e.event_type === 'HISTORICAL_TREND_CHANGE');
                     const counts = { BULLISH:0, BEARISH:0, NEUTRAL:0, CHANGES:0 };
                     signals.forEach(e => { if (counts[e.trend] !== undefined) counts[e.trend]++; if (e.previous_trend && e.previous_trend !== e.trend) counts.CHANGES++; });
                     const summary = document.getElementById('journalSummary');
@@ -2385,6 +2406,21 @@
                         ['LATEST TREND', latest?.trend || '-', latest?.trend === 'BULLISH' ? '#10b981' : latest?.trend === 'BEARISH' ? '#f87171' : '#cbd5e1'],
                         ['RECORDS', signals.length, '#f8fafc'], ['BULLISH', counts.BULLISH, '#10b981'], ['BEARISH', counts.BEARISH, '#f87171'], ['CHANGES', counts.CHANGES, '#60a5fa']
                     ].map(x => `<div class="trend-summary-item"><label>${x[0]}</label><strong style="font-size:18px;color:${x[2]}">${x[1]}</strong></div>`).join('');
+                    const trendEl = document.getElementById('journalDecisionTrend');
+                    const actionEl = document.getElementById('journalDecisionAction');
+                    const reasonEl = document.getElementById('journalDecisionReason');
+                    const basketEl = document.getElementById('journalDecisionBasket');
+                    const trendColor = latest?.trend === 'BULLISH' ? '#10b981' : latest?.trend === 'BEARISH' ? '#f87171' : '#cbd5e1';
+                    if (trendEl) { trendEl.textContent = latest?.trend || 'WAITING FOR SCAN'; trendEl.style.color = trendColor; }
+                    if (actionEl) { actionEl.textContent = latest?.trend === 'BULLISH' || latest?.trend === 'BEARISH' ? 'CONSIDER BASKET' : 'WAIT / NO TRADE'; actionEl.className = 'badge ' + (latest?.trend === 'BULLISH' ? 'badge-bullish' : latest?.trend === 'BEARISH' ? 'badge-bearish' : 'badge-neutral'); }
+                    if (reasonEl) reasonEl.textContent = latest ? `${latest.signal_status || 'No signal'} · Futures ${latest.futures_confirmation || '-'} · ${latest.raw_trend === latest.trend ? 'Confirmed signal' : 'Persisted trend'}` : 'Run a historical scan or refresh strategy data.';
+                    if (basketEl) basketEl.textContent = latest?.payload?.basket?.label || (latest?.trend === 'NEUTRAL' ? 'Consolidation / wait' : 'Trending market');
+                    const sinceEl = document.getElementById('journalPersistedSince');
+                    if (sinceEl) sinceEl.textContent = latestChange?.candle_at ? new Date(latestChange.candle_at).toLocaleDateString('en-IN') : (latest?.candle_at ? new Date(latest.candle_at).toLocaleDateString('en-IN') : '-');
+                    const confEl = document.getElementById('journalDecisionConfidence');
+                    if (confEl) confEl.textContent = latest?.signal_status?.startsWith('PAIRED_') ? 'HIGH' : latest ? 'MEDIUM' : '-';
+                    const latestEl = document.getElementById('journalLatestConfirmation');
+                    if (latestEl) latestEl.textContent = latest?.candle_at ? new Date(latest.candle_at).toLocaleString('en-IN') : '-';
                     const timeline = document.getElementById('trendTimeline');
                     if (timeline) {
                         const days = signals.slice().sort((a,b) => (a.candle_at||'').localeCompare(b.candle_at||''));
@@ -2395,7 +2431,9 @@
                     const p = e.payload || {};
                     const d = p.details || {};
                     const detail = `CE ${d.ce_close ?? '-'} / MA9 ${d.ce_ma9 ?? '-'} · PE ${d.pe_close ?? '-'} / MA9 ${d.pe_ma9 ?? '-'} · FUT ${d.futures_close ?? e.market_price ?? '-'} / MA9 ${d.futures_ma9 ?? '-'}`;
-                    return `<tr title="${detail}"><td>${e.candle_at ? new Date(e.candle_at).toLocaleString('en-IN') : (p.date || '-')}</td><td>${e.occurred_at ? new Date(e.occurred_at).toLocaleString('en-IN') : '-'}</td><td style="font-family:monospace">${e.scan_id || p.scan_id || '-'}</td><td>${e.sequence_no || '-'}</td><td><span class="badge badge-neutral">${e.event_type}</span></td><td>${e.trend || '-'}</td><td>${e.raw_trend || p.raw_trend || '-'}</td><td>${e.signal_status || '-'}</td><td>${e.futures_confirmation || d.futures_confirmation || '-'}</td><td><details><summary>View</summary><span style="color:#94a3b8">${detail}</span><br>ATM ${e.atm_strike ?? p.atm_strike ?? '-'} · ${e.expiry || p.expiry || '-'}</details></td></tr>`;
+                    const basket = p.basket || {};
+                    const signalLabel = e.signal_status === 'PAIRED_BULLISH_CROSS' ? 'NEW BULLISH CROSS' : e.signal_status === 'PAIRED_BEARISH_CROSS' ? 'NEW BEARISH CROSS' : e.signal_status === 'TREND_CONTINUES_BULLISH' ? 'TREND CONTINUES BULLISH' : e.signal_status === 'TREND_CONTINUES_BEARISH' ? 'TREND CONTINUES BEARISH' : e.signal_status === 'CONFLICTING_FUTURES_CONFIRMATION' ? 'CONFLICTING FUTURES' : (e.signal_status || '-');
+                    return `<tr title="${detail}"><td>${e.candle_at ? new Date(e.candle_at).toLocaleString('en-IN') : (p.date || '-')}</td><td>${e.occurred_at ? new Date(e.occurred_at).toLocaleString('en-IN') : '-'}</td><td style="font-family:monospace">${e.scan_id || p.scan_id || '-'}</td><td>${e.sequence_no || '-'}</td><td><span class="badge badge-neutral">${e.event_type}</span></td><td>${e.trend || '-'}</td><td>${e.raw_trend || p.raw_trend || '-'}</td><td>${signalLabel}</td><td>${e.futures_confirmation || d.futures_confirmation || '-'}</td><td><details><summary>View</summary><span style="color:#94a3b8">${detail}</span><br>ATM ${e.atm_strike ?? p.atm_strike ?? '-'} · ${e.expiry || p.expiry || '-'}<br><b>${basket.label || 'Basket'}:</b> ${basket.action || 'Review strategy basket'} <button class="btn btn-secondary" style="padding:2px 7px;font-size:10px" onclick="switchTab('master-console')">VIEW BASKETS</button></details></td></tr>`;
                     }).join('');
                     const journalWrap = body.closest('.journal-table-wrap');
                     if (journalWrap) journalWrap.scrollLeft = 0;
@@ -2407,19 +2445,22 @@
                 const body = document.getElementById('strategyScanBody');
                 if (!body) return;
                 if (!data.scans || !data.scans.length) { body.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#64748b;padding:20px;">No scans run yet.</td></tr>'; return; }
+                const latestQuality = data.scans[0].summary?.data_quality;
+                const qualityEl = document.getElementById('journalDataQuality');
+                if (qualityEl) qualityEl.textContent = data.scans[0].status === 'COMPLETED' ? `${latestQuality?.common_completed_records ?? data.scans[0].summary?.records ?? 0} completed · ${latestQuality?.dropped_for_date_mismatch ?? 0} mismatched` : data.scans[0].status;
                 body.innerHTML = data.scans.map(s => { const x=s.summary||{}; return `<tr><td style="font-family:monospace">${s.scan_id}</td><td>${s.created_at ? new Date(s.created_at).toLocaleString('en-IN') : '-'}</td><td><span class="badge ${s.status === 'COMPLETED' ? 'badge-bullish' : 'badge-bearish'}">${s.status}</span></td><td>${s.from_date||'-'} → ${s.to_date||'-'}</td><td>${x.records??'-'}</td><td style="color:#10b981">${x.BULLISH??0}</td><td style="color:#f87171">${x.BEARISH??0}</td><td>${x.NEUTRAL??0}</td><td>${x.CHANGED??0}</td><td>${x.message||'-'}</td></tr>`; }).join('');
             }).catch(err => console.error('Scan history error:', err));
         }
 
         function runTwentyDayScan(button) {
             if (button) { button.disabled = true; button.textContent = '⏳ SCANNING…'; }
-            fetch('/api/strategy/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol:'NATGASMINI', days:20})})
+            fetch('/api/strategy/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol:document.getElementById('journalSymbol')?.value || 'NATGASMINI', days:Number(document.getElementById('journalDays')?.value || 20), expiry:document.getElementById('journalExpiry')?.value || 'AUTO'})})
                 .then(r => r.json()).then(data => {
                     if (data.status !== 'success') alert(data.message || 'Scan failed');
                     else alert(`Scan saved: ${data.scan.records} records, ${data.scan.CHANGED} trend changes.`);
                     pollStrategyEvents(); pollStrategyScans();
                 }).catch(err => alert('Scan error: ' + err.message))
-                .finally(() => { if (button) { button.disabled = false; button.textContent = '🔎 SCAN LAST 20 DAYS'; } });
+                .finally(() => { if (button) { button.disabled = false; button.textContent = '🔎 RUN SCAN'; } });
         }
 
         function updateMasterSummary(baskets) {
