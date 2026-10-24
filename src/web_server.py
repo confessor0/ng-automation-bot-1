@@ -705,7 +705,13 @@ def refresh_market_data():
                 # still requires the existing review/approval flow.
                 from src.adaptive_strategy import build_recommendation
                 option_quotes = {}
-                option_symbols = [details.get("ce_symbol"), details.get("pe_symbol")]
+                # When there are not yet ten completed candles, the signal
+                # engine intentionally returns WAIT without option symbols.
+                # Still show the neutral Strategy 2 plan using the current ATM
+                # premiums so the user can review trades to consider.
+                ce_for_plan = details.get("ce_symbol") or construct_symbol(symbol, "OPT", expiry, atm_strike, "CE")
+                pe_for_plan = details.get("pe_symbol") or construct_symbol(symbol, "OPT", expiry, atm_strike, "PE")
+                option_symbols = [ce_for_plan, pe_for_plan]
                 try:
                     option_quotes.update(market_data._get_batch_ltp([s for s in option_symbols if s]))
                 except Exception:
@@ -720,7 +726,7 @@ def refresh_market_data():
                     quote=lambda sym: option_quotes.get(sym, 0.0),
                     symbol_builder=construct_symbol,
                     futures_confirmation=details.get("futures_confirmation", "UNKNOWN"),
-                    consolidation=bool(details.get("both_below_ma9")),
+                    consolidation=(trend == "NEUTRAL"),
                 )
                 rec_position["composition"] = [
                     {"role": f"{leg['action']} {leg['instrument']}", "instrument": leg["instrument"],

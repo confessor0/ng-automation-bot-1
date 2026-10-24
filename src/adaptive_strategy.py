@@ -55,7 +55,7 @@ def build_recommendation(
     symbol_builder = symbol_builder or (lambda _base, _kind, _expiry, strike, opt: f"{strike}{opt}")
     base = "NATGASMINI"
 
-    if not cmp or not atm_strike or futures_confirmation not in ("BULLISH", "BEARISH", "CONSOLIDATION"):
+    if not cmp or not atm_strike or (trend != "NEUTRAL" and futures_confirmation not in ("BULLISH", "BEARISH")):
         return _wait("WAIT", "Futures price-action confirmation is required before recommending a position.", cmp, atm_strike, expiry, signal_status)
 
     if trend == "BULLISH" and futures_confirmation != "BULLISH":
@@ -86,13 +86,19 @@ def build_recommendation(
             _leg("BUY", "OPT", call_strike, "CE", 10, symbol_builder(base, "OPT", expiry, call_strike, "CE"), quote(symbol_builder(base, "OPT", expiry, call_strike, "CE"))),
         ]
         validation = _validation(legs, premiums_available=premiums_available)
+        # Neutral legs are useful as a trade plan even before the range is
+        # confirmed. Keep them visible, but do not mark them executable.
+        if futures_confirmation != "CONSOLIDATION":
+            validation["execution_ready"] = False
         return {
             "strategy": "STRATEGY_2",
             "strategy_label": "Consolidation Markets",
             "direction": "NEUTRAL",
-            "status": "READY" if validation["execution_ready"] else "WAIT",
+            "status": "READY" if validation["execution_ready"] else "CONSIDER",
             "signal_status": signal_status,
-            "rationale": "Range-bound futures action with a protected ATM straddle.",
+            "rationale": ("Range-bound futures action with a protected ATM straddle."
+                          if futures_confirmation == "CONSOLIDATION"
+                          else "Neutral options setup to consider; wait for futures consolidation confirmation before execution."),
             "market_context": {"current_price": cmp, "atm_strike": atm_strike, "expiry": expiry, "combined_premium": round(combined_premium, 4), "hedge_rule": "S ± (ATM CE + ATM PE), rounded to valid strike"},
             "legs": legs,
             "validation": validation,
