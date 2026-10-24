@@ -2433,7 +2433,8 @@
                     const detail = `CE ${d.ce_close ?? '-'} / MA9 ${d.ce_ma9 ?? '-'} · PE ${d.pe_close ?? '-'} / MA9 ${d.pe_ma9 ?? '-'} · FUT ${d.futures_close ?? e.market_price ?? '-'} / MA9 ${d.futures_ma9 ?? '-'}`;
                     const basket = p.basket || {};
                     const signalLabel = e.signal_status === 'PAIRED_BULLISH_CROSS' ? 'NEW BULLISH CROSS' : e.signal_status === 'PAIRED_BEARISH_CROSS' ? 'NEW BEARISH CROSS' : e.signal_status === 'TREND_CONTINUES_BULLISH' ? 'TREND CONTINUES BULLISH' : e.signal_status === 'TREND_CONTINUES_BEARISH' ? 'TREND CONTINUES BEARISH' : e.signal_status === 'CONFLICTING_FUTURES_CONFIRMATION' ? 'CONFLICTING FUTURES' : (e.signal_status || '-');
-                    return `<tr title="${detail}"><td>${e.candle_at ? new Date(e.candle_at).toLocaleString('en-IN') : (p.date || '-')}</td><td>${e.occurred_at ? new Date(e.occurred_at).toLocaleString('en-IN') : '-'}</td><td style="font-family:monospace">${e.scan_id || p.scan_id || '-'}</td><td>${e.sequence_no || '-'}</td><td><span class="badge badge-neutral">${e.event_type}</span></td><td>${e.trend || '-'}</td><td>${e.raw_trend || p.raw_trend || '-'}</td><td>${signalLabel}</td><td>${e.futures_confirmation || d.futures_confirmation || '-'}</td><td><details><summary>View</summary><span style="color:#94a3b8">${detail}</span><br>ATM ${e.atm_strike ?? p.atm_strike ?? '-'} · ${e.expiry || p.expiry || '-'}<br><b>${basket.label || 'Basket'}:</b> ${basket.action || 'Review strategy basket'} <button class="btn btn-secondary" style="padding:2px 7px;font-size:10px" onclick="switchTab('master-console')">VIEW BASKETS</button></details></td></tr>`;
+                    const simData = encodeURIComponent(JSON.stringify({symbol:e.symbol || 'NATGASMINI', trend:e.trend, expiry:e.expiry || p.expiry, symbols:p.symbols || {}, details:d, basket:basket}));
+                    return `<tr title="${detail}"><td>${e.candle_at ? new Date(e.candle_at).toLocaleString('en-IN') : (p.date || '-')}</td><td>${e.occurred_at ? new Date(e.occurred_at).toLocaleString('en-IN') : '-'}</td><td style="font-family:monospace">${e.scan_id || p.scan_id || '-'}</td><td>${e.sequence_no || '-'}</td><td><span class="badge badge-neutral">${e.event_type}</span></td><td>${e.trend || '-'}</td><td>${e.raw_trend || p.raw_trend || '-'}</td><td>${signalLabel}</td><td>${e.futures_confirmation || d.futures_confirmation || '-'}</td><td><details><summary>View</summary><span style="color:#94a3b8">${detail}</span><br>ATM ${e.atm_strike ?? p.atm_strike ?? '-'} · ${e.expiry || p.expiry || '-'}<br><b>${basket.label || 'Basket'}:</b> ${basket.action || 'Review strategy basket'} <button class="btn btn-secondary" style="padding:2px 7px;font-size:10px" onclick="switchTab('master-console')">VIEW BASKETS</button> <button class="btn btn-primary" style="padding:2px 7px;font-size:10px" onclick="openSignalSimulator('${simData}')">SIMULATE</button></details></td></tr>`;
                     }).join('');
                     const journalWrap = body.closest('.journal-table-wrap');
                     if (journalWrap) journalWrap.scrollLeft = 0;
@@ -2643,6 +2644,29 @@
                 const s = data.simulation;
                 out.innerHTML = `<div style="padding:14px;border:1px solid ${s.total_pnl >= 0 ? '#10b981' : '#ef4444'}66;border-radius:8px;background:rgba(15,23,42,.7);"><b>Simulation saved: ${s.simulation_id}</b><br><span style="font-size:20px;color:${s.total_pnl >= 0 ? '#10b981' : '#f87171'}">Net P&amp;L: ₹${s.total_pnl.toFixed(2)}</span><br><span style="color:#94a3b8">${s.entry_day} ${s.entry_hour} → ${s.exit_day} ${s.exit_hour} · ${s.holding_hours} hours · Return ${s.return_on_entry_pct ?? '-'}%</span></div>`;
             }).catch(err => alert('Simulation error: ' + err.message));
+        }
+
+        function openSignalSimulator(encoded) {
+            const plan = JSON.parse(decodeURIComponent(encoded));
+            const d = plan.details || {};
+            const legs = [
+                {key:'fut', symbol:plan.symbols?.fut || 'FUTURES', side:plan.trend === 'BULLISH' ? 'BUY' : 'SELL', price:d.futures_close || 0},
+                {key:'ce', symbol:plan.symbols?.ce || 'ATM CE', side:'SELL', price:d.ce_close || 0},
+                {key:'pe', symbol:plan.symbols?.pe || 'ATM PE', side:'SELL', price:d.pe_close || 0}
+            ];
+            const now = new Date(), later = new Date(now.getTime() + 24*3600*1000);
+            const iso = x => new Date(x.getTime() - x.getTimezoneOffset()*60000).toISOString().slice(0,16);
+            const legPayload = encodeURIComponent(JSON.stringify(legs));
+            document.body.insertAdjacentHTML('beforeend', `<div id="signalSimulatorModal" style="position:fixed;inset:0;background:rgba(2,6,23,.86);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px"><div class="card" style="width:min(900px,96vw);max-height:90vh;overflow:auto"><div style="display:flex;justify-content:space-between"><div><div class="card-title">📊 Signal Basket Simulator</div><div style="font-size:12px;color:#94a3b8">${plan.trend || 'NEUTRAL'} · ${plan.basket?.label || 'Strategy basket'} · no live order</div></div><button class="btn btn-secondary" onclick="document.getElementById('signalSimulatorModal').remove()">CLOSE</button></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><label>ENTRY (IST)<input id="sigSimEntry" class="input-minimal" type="datetime-local" value="${iso(now)}" style="width:100%"></label><label>EXIT (IST)<input id="sigSimExit" class="input-minimal" type="datetime-local" value="${iso(later)}" style="width:100%"></label></div><table class="journal-table"><thead><tr><th>SYMBOL</th><th>SIDE</th><th>ENTRY</th><th>EXIT</th><th>QTY</th></tr></thead><tbody>${legs.map((l,i)=>`<tr><td>${l.symbol}</td><td>${l.side}</td><td><input class="sigSimEntry" data-key="${i}" type="number" step=".01" value="${l.price}"></td><td><input class="sigSimExit" data-key="${i}" type="number" step=".01" value="${l.price}"></td><td><input class="sigSimQty" data-key="${i}" type="number" min="1" value="1"></td></tr>`).join('')}</tbody></table><div style="display:flex;justify-content:flex-end;margin-top:14px"><button class="btn btn-primary" onclick="runSignalSimulation('${legPayload}')">RUN & SAVE SIMULATION</button></div><div id="sigSimResult" style="margin-top:12px"></div></div></div>`);
+        }
+
+        function runSignalSimulation(encodedLegs) {
+            const legs = JSON.parse(decodeURIComponent(encodedLegs));
+            const entries={}, exits={}, quantities={};
+            document.querySelectorAll('.sigSimEntry').forEach(x=>entries[x.dataset.key]=x.value);
+            document.querySelectorAll('.sigSimExit').forEach(x=>exits[x.dataset.key]=x.value);
+            document.querySelectorAll('.sigSimQty').forEach(x=>quantities[x.dataset.key]=x.value);
+            fetch('/api/simulations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:'NATGASMINI',entry_at:document.getElementById('sigSimEntry').value,exit_at:document.getElementById('sigSimExit').value,lot_size:1250,legs:legs.map((l,i)=>({seq:i+1,symbol:l.symbol,side:l.side,qty:quantities[i] || 1})),entry_prices:entries,exit_prices:exits,quantities:quantities})}).then(r=>r.json()).then(x=>{const s=x.simulation, out=document.getElementById('sigSimResult'); out.innerHTML=s?`<div style="color:${s.total_pnl>=0?'#10b981':'#f87171'};font-weight:700">Saved ${s.simulation_id} · Net P&amp;L ₹${s.total_pnl.toFixed(2)} · ${s.holding_hours} hours</div>`:`<div style="color:#f87171">${x.message||'Simulation failed'}</div>`;}).catch(e=>alert(e.message));
         }
 
         function handleConsoleAction(basket_id, action) {
