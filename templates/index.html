@@ -432,6 +432,55 @@
             background: rgba(255, 255, 255, 0.02);
         }
 
+        .journal-table-wrap {
+            width: 100%;
+            max-width: 100%;
+            overflow-x: auto;
+            overflow-y: hidden;
+            direction: ltr;
+            scrollbar-gutter: stable;
+        }
+        .journal-table {
+            min-width: 1120px;
+            margin-top: 8px;
+        }
+        .journal-table th, .journal-table td {
+            padding: 9px 10px;
+            white-space: nowrap;
+            vertical-align: top;
+        }
+        .journal-table td:last-child {
+            white-space: normal;
+            min-width: 230px;
+        }
+        .trend-summary-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+            margin: 14px 0;
+        }
+        .trend-summary-item {
+            padding: 12px;
+            border: 1px solid rgba(255,255,255,.07);
+            border-radius: 10px;
+            background: rgba(2,6,23,.28);
+        }
+        .trend-summary-item label {
+            display:block; font-size:10px; color:#64748b; text-transform:uppercase;
+            letter-spacing:.04em; margin-bottom:5px;
+        }
+        .trend-timeline {
+            display:flex; gap:4px; align-items:flex-end; min-height:46px;
+            padding:10px; border-radius:10px; background:rgba(2,6,23,.3);
+            overflow-x:auto; margin-bottom:14px;
+        }
+        .trend-day { min-width:28px; height:28px; border-radius:5px; cursor:pointer; position:relative; }
+        .trend-day:hover { outline:2px solid #f8fafc; outline-offset:1px; }
+        .trend-day.bullish { background:#10b981; }
+        .trend-day.bearish { background:#ef4444; }
+        .trend-day.neutral { background:#64748b; }
+        .trend-day.continues { box-shadow: inset 0 -4px 0 #60a5fa; }
+
         /* UI Badges */
         .badge {
             padding: 4px 10px;
@@ -629,6 +678,7 @@
                 overflow-x: auto;
                 white-space: nowrap;
             }
+            .trend-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
             .btn {
                 padding: 10px 16px;
@@ -1426,9 +1476,11 @@
                     <div style="display:flex;gap:8px;"><button class="btn btn-primary" style="padding:5px 10px;font-size:11px;" onclick="runTwentyDayScan(this)">🔎 SCAN LAST 20 DAYS</button><button class="btn btn-secondary" style="padding:5px 10px;font-size:11px;" onclick="pollStrategyEvents();pollStrategyScans()">REFRESH</button></div>
                 </div>
                 <div style="font-size:11px;color:#94a3b8;margin-bottom:10px;">Trend analyses, MA9 confirmations, trend changes, and saved simulations are recorded here.</div>
-                <div style="overflow:auto;"><table style="font-size:11px;"><thead><tr><th>CANDLE (IST)</th><th>SAVED (IST)</th><th>SCAN</th><th>#</th><th>EVENT</th><th>FINAL</th><th>RAW</th><th>SIGNAL</th><th>FUTURES</th><th>DETAILS</th></tr></thead><tbody id="strategyEventBody"><tr><td colspan="10" style="text-align:center;color:#64748b;padding:20px;">No events recorded yet.</td></tr></tbody></table></div>
+                <div id="journalSummary" class="trend-summary-grid"></div>
+                <div id="trendTimeline" class="trend-timeline"><span style="color:#64748b;font-size:11px;">Run a scan to build the 20-day trend timeline.</span></div>
+                <div class="journal-table-wrap"><table class="journal-table" style="font-size:11px;"><thead><tr><th>CANDLE (IST)</th><th>SAVED (IST)</th><th>SCAN</th><th>#</th><th>EVENT</th><th>FINAL</th><th>RAW</th><th>SIGNAL</th><th>FUTURES</th><th>DETAILS</th></tr></thead><tbody id="strategyEventBody"><tr><td colspan="10" style="text-align:center;color:#64748b;padding:20px;">No events recorded yet.</td></tr></tbody></table></div>
                 <div style="font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;margin:18px 0 8px;">Saved scans</div>
-                <div style="overflow:auto;"><table style="font-size:11px;"><thead><tr><th>SCAN</th><th>CREATED (IST)</th><th>STATUS</th><th>WINDOW</th><th>RECORDS</th><th>BULLISH</th><th>BEARISH</th><th>NEUTRAL</th><th>CHANGES</th><th>MESSAGE</th></tr></thead><tbody id="strategyScanBody"><tr><td colspan="10" style="text-align:center;color:#64748b;padding:20px;">No scans run yet.</td></tr></tbody></table></div>
+                <div class="journal-table-wrap"><table class="journal-table" style="font-size:11px;"><thead><tr><th>SCAN</th><th>CREATED (IST)</th><th>STATUS</th><th>WINDOW</th><th>RECORDS</th><th>BULLISH</th><th>BEARISH</th><th>NEUTRAL</th><th>CHANGES</th><th>MESSAGE</th></tr></thead><tbody id="strategyScanBody"><tr><td colspan="10" style="text-align:center;color:#64748b;padding:20px;">No scans run yet.</td></tr></tbody></table></div>
             </div>
         </div>
 
@@ -2324,13 +2376,29 @@
                 .then(r => r.json()).then(data => {
                     const body = document.getElementById('strategyEventBody');
                     if (!body) return;
-                    if (!data.events || !data.events.length) { body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#64748b;padding:20px;">No events recorded yet.</td></tr>'; return; }
-                body.innerHTML = data.events.map(e => {
+                    const signals = (data.events || []).filter(e => e.event_type === 'HISTORICAL_SIGNAL');
+                    const latest = signals[0];
+                    const counts = { BULLISH:0, BEARISH:0, NEUTRAL:0, CHANGES:0 };
+                    signals.forEach(e => { if (counts[e.trend] !== undefined) counts[e.trend]++; if (e.previous_trend && e.previous_trend !== e.trend) counts.CHANGES++; });
+                    const summary = document.getElementById('journalSummary');
+                    if (summary) summary.innerHTML = [
+                        ['LATEST TREND', latest?.trend || '-', latest?.trend === 'BULLISH' ? '#10b981' : latest?.trend === 'BEARISH' ? '#f87171' : '#cbd5e1'],
+                        ['RECORDS', signals.length, '#f8fafc'], ['BULLISH', counts.BULLISH, '#10b981'], ['BEARISH', counts.BEARISH, '#f87171'], ['CHANGES', counts.CHANGES, '#60a5fa']
+                    ].map(x => `<div class="trend-summary-item"><label>${x[0]}</label><strong style="font-size:18px;color:${x[2]}">${x[1]}</strong></div>`).join('');
+                    const timeline = document.getElementById('trendTimeline');
+                    if (timeline) {
+                        const days = signals.slice().sort((a,b) => (a.candle_at||'').localeCompare(b.candle_at||''));
+                        timeline.innerHTML = days.length ? days.map(e => `<div class="trend-day ${(e.trend||'NEUTRAL').toLowerCase()} ${String(e.signal_status||'').startsWith('TREND_CONTINUES') ? 'continues' : ''}" title="${e.candle_at || '-'} · ${e.trend || '-'} · ${e.signal_status || '-'}"></div>`).join('') : '<span style="color:#64748b;font-size:11px;">Run a scan to build the 20-day trend timeline.</span>';
+                    }
+                    if (!data.events || !data.events.length) { body.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#64748b;padding:20px;">No events recorded yet.</td></tr>'; return; }
+                    body.innerHTML = data.events.map(e => {
                     const p = e.payload || {};
                     const d = p.details || {};
                     const detail = `CE ${d.ce_close ?? '-'} / MA9 ${d.ce_ma9 ?? '-'} · PE ${d.pe_close ?? '-'} / MA9 ${d.pe_ma9 ?? '-'} · FUT ${d.futures_close ?? e.market_price ?? '-'} / MA9 ${d.futures_ma9 ?? '-'}`;
                     return `<tr title="${detail}"><td>${e.candle_at ? new Date(e.candle_at).toLocaleString('en-IN') : (p.date || '-')}</td><td>${e.occurred_at ? new Date(e.occurred_at).toLocaleString('en-IN') : '-'}</td><td style="font-family:monospace">${e.scan_id || p.scan_id || '-'}</td><td>${e.sequence_no || '-'}</td><td><span class="badge badge-neutral">${e.event_type}</span></td><td>${e.trend || '-'}</td><td>${e.raw_trend || p.raw_trend || '-'}</td><td>${e.signal_status || '-'}</td><td>${e.futures_confirmation || d.futures_confirmation || '-'}</td><td><details><summary>View</summary><span style="color:#94a3b8">${detail}</span><br>ATM ${e.atm_strike ?? p.atm_strike ?? '-'} · ${e.expiry || p.expiry || '-'}</details></td></tr>`;
-                }).join('');
+                    }).join('');
+                    const journalWrap = body.closest('.journal-table-wrap');
+                    if (journalWrap) journalWrap.scrollLeft = 0;
                 }).catch(err => console.error('Event journal error:', err));
         }
 
