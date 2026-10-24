@@ -3731,9 +3731,10 @@
                         <td style="padding: 8px 12px; color: #94a3b8; font-size: 11px; font-family: monospace;">${leg.trading_symbol || '-'}</td>
                         <td style="padding: 8px 12px; text-align: center;"><span style="background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600;">${leg.instrument}</span></td>
                         <td style="padding: 8px 12px; text-align: center; font-weight: 700;"><span style="color: ${leg.action === 'BUY' ? '#10b981' : '#ef4444'};">${leg.action}</span></td>
-                        <td style="padding: 8px 12px; text-align: right; font-family: tabular-nums;">${leg.strike || 'MKT'}</td>
+                        <td style="padding: 8px 12px; text-align: right; font-family: tabular-nums;">${leg.instrument === 'FUT' ? '—' : (leg.strike || '—')}</td>
                         <td style="padding: 8px 12px; text-align: right; font-family: tabular-nums; font-weight: 600;">${leg.qty}</td>
-                        <td style="padding: 8px 12px; text-align: right; font-family: tabular-nums; color: #f8fafc;">₹${(leg.ltp || 0).toFixed(2)}</td>
+                        <td style="padding: 8px 12px; text-align: right; font-family: tabular-nums; color: ${leg.ltp ? '#f8fafc' : '#fbbf24'};">${leg.ltp ? `₹${leg.ltp.toFixed(2)}` : 'PRICE REQUIRED'}</td>
+                        <td style="padding: 8px 12px; text-align: center;"><span style="background: rgba(96,165,250,.16); color:#93c5fd; padding:2px 6px; border-radius:4px; font-size:10px; font-weight:700;">${leg.order_type || 'LIMIT'}</span></td>
                         <td style="padding: 8px 12px; text-align: right; font-family: tabular-nums; color: #cbd5e1;">₹${(Math.abs(leg.value) || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })}</td>
                     </tr>`).join('');
 
@@ -3752,7 +3753,8 @@
                                     <th style="padding: 8px 12px; text-align: center;">Action</th>
                                     <th style="padding: 8px 12px; text-align: right;">Strike</th>
                                     <th style="padding: 8px 12px; text-align: right;">Qty</th>
-                                    <th style="padding: 8px 12px; text-align: right;">LTP</th>
+                                    <th style="padding: 8px 12px; text-align: right;">LIMIT PRICE</th>
+                                    <th style="padding: 8px 12px; text-align: center;">ORDER TYPE</th>
                                     <th style="padding: 8px 12px; text-align: right;">Value</th>
                                 </tr>
                             </thead>

@@ -882,6 +882,19 @@ def refresh_market_data():
                     option_quotes.update(market_data._get_batch_ltp([s for s in option_symbols if s]))
                 except Exception:
                     pass
+                def plan_quote(trading_symbol):
+                    """Return a read-only LTP for every leg used in the preview."""
+                    if not trading_symbol:
+                        return 0.0
+                    if trading_symbol not in option_quotes:
+                        try:
+                            option_quotes.update(market_data._get_batch_ltp([trading_symbol]))
+                        except Exception:
+                            pass
+                    try:
+                        return float(option_quotes.get(trading_symbol) or 0.0)
+                    except (TypeError, ValueError):
+                        return 0.0
                 rec_position = build_recommendation(
                     trend=trend,
                     signal_status=details.get("signal_status", "NO_SIGNAL"),
@@ -889,15 +902,27 @@ def refresh_market_data():
                     atm_strike=atm_strike,
                     expiry=expiry,
                     option_interval=inst_config.get("strike_interval", 5),
-                    quote=lambda sym: option_quotes.get(sym, 0.0),
+                    quote=plan_quote,
                     symbol_builder=construct_symbol,
                     futures_confirmation=details.get("futures_confirmation", "UNKNOWN"),
                     consolidation=(trend == "NEUTRAL"),
                 )
+                # A futures leg uses the current underlying LTP. Every
+                # displayed leg receives an explicit limit price so the UI
+                # never presents MKT as an executable price.
+                for leg in rec_position.get("legs", []):
+                    if leg.get("instrument") == "FUT":
+                        leg["premium"] = round(float(ltp or 0.0), 4)
+                        leg["data_quality"] = "LIVE_LTP_ESTIMATE"
+                    elif leg.get("premium"):
+                        leg["data_quality"] = leg.get("data_quality") or "LIVE_LTP_ESTIMATE"
+                    else:
+                        leg["data_quality"] = "MANUAL_PRICE_REQUIRED"
                 rec_position["composition"] = [
                     {"role": f"{leg['action']} {leg['instrument']}", "instrument": leg["instrument"],
                      "action": leg["action"], "strike": leg["strike"] or "MKT", "qty": leg["qty"],
                      "trading_symbol": leg.get("symbol"), "ltp": leg.get("premium") or 0.0,
+                     "limit_price": leg.get("premium") or 0.0, "order_type": "LIMIT",
                      "value": (leg.get("premium") or 0.0) * leg["qty"] * lot_size}
                     for leg in rec_position.get("legs", [])
                 ]
