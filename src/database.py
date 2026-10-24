@@ -93,6 +93,25 @@ class UnifiedOrderManager:
                 if column not in existing:
                     cursor.execute(f"ALTER TABLE strategy_events ADD COLUMN {column} {definition}")
 
+            # Historical scans are repeatable. Keep one signal row and one
+            # trend-change row per candle/contract, even when the user scans
+            # the same window again. Older releases could already have made
+            # duplicates, so collapse those rows during startup as well.
+            cursor.execute("""
+                DELETE FROM strategy_events
+                WHERE event_type IN ('HISTORICAL_SIGNAL', 'HISTORICAL_TREND_CHANGE')
+                  AND id NOT IN (
+                      SELECT MAX(id)
+                      FROM strategy_events
+                      WHERE event_type IN ('HISTORICAL_SIGNAL', 'HISTORICAL_TREND_CHANGE')
+                      GROUP BY event_type, symbol, expiry, atm_strike, candle_at
+                  )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_strategy_events_historical_key
+                ON strategy_events(event_type, symbol, expiry, atm_strike, candle_at)
+            """)
+
             # Saved, reproducible what-if calculations for any basket.
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS simulations (
@@ -266,21 +285,48 @@ class UnifiedOrderManager:
                               expiry=None, atm_strike=None, market_price=None,
                               payload=None, occurred_at=None, scan_id=None,
                               sequence_no=None, candle_at=None, previous_trend=None,
-                              raw_trend=None):
-        """Persist one strategy observation without replacing earlier events."""
+                              raw_trend=None, dedupe=False):
+        """Persist one strategy observation.
+
+        Historical scan events can be written repeatedly for the same candle.
+        With ``dedupe=True`` they are upserted by event type, symbol, expiry,
+        ATM strike, and candle timestamp. Live refresh events retain their
+        append-only behavior.
+        """
         occurred_at = occurred_at or datetime.now(TIMEZONE).isoformat()
         with sqlite3.connect(self.DB_PATH) as conn:
             cursor = conn.cursor()
+            values = (event_type, symbol, trend, signal_status,
+                      futures_confirmation, expiry, atm_strike, market_price,
+                      occurred_at, json.dumps(payload or {}, default=str), scan_id,
+                      sequence_no, candle_at, previous_trend, raw_trend)
+            if dedupe:
+                cursor.execute("""
+                    SELECT id FROM strategy_events
+                    WHERE event_type = ? AND symbol = ?
+                      AND expiry IS ? AND atm_strike IS ? AND candle_at IS ?
+                    ORDER BY id DESC LIMIT 1
+                """, (event_type, symbol, expiry, atm_strike, candle_at))
+                existing = cursor.fetchone()
+                if existing:
+                    cursor.execute("""
+                        UPDATE strategy_events SET
+                            trend = ?, signal_status = ?, futures_confirmation = ?,
+                            market_price = ?, occurred_at = ?, payload = ?,
+                            scan_id = ?, sequence_no = ?, previous_trend = ?, raw_trend = ?
+                        WHERE id = ?
+                    """, (trend, signal_status, futures_confirmation, market_price,
+                          occurred_at, values[9], scan_id, sequence_no,
+                          previous_trend, raw_trend, existing[0]))
+                    conn.commit()
+                    return existing[0]
             cursor.execute("""
                 INSERT INTO strategy_events
                 (event_type, symbol, trend, signal_status, futures_confirmation,
                  expiry, atm_strike, market_price, occurred_at, payload,
                  scan_id, sequence_no, candle_at, previous_trend, raw_trend)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (event_type, symbol, trend, signal_status,
-                  futures_confirmation, expiry, atm_strike, market_price,
-                  occurred_at, json.dumps(payload or {}, default=str), scan_id,
-                  sequence_no, candle_at, previous_trend, raw_trend))
+            """, values)
             conn.commit()
             return cursor.lastrowid
 

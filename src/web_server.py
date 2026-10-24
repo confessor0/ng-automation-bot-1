@@ -157,6 +157,91 @@ def login():
 
     return render_template('login.html')
 
+
+def _mobile_authenticated_user():
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
+    from src.mobile_service import get_mobile_user
+    return token, get_mobile_user(token, state_mgr.user_manager)
+
+
+@app.route('/api/mobile/login', methods=['POST'])
+def mobile_login():
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", ""))
+    token, user = state_mgr.user_manager.authenticate(username, password)
+    if not token:
+        return jsonify({"success": False, "message": "Username or password is incorrect."}), 401
+    # The browser session token is process-local; issue a revocable mobile token
+    # persisted as a hash so it survives Railway restarts without storing it raw.
+    state_mgr.user_manager.sessions.pop(token, None)
+    from src.mobile_service import issue_mobile_session
+    mobile_token, expires_at = issue_mobile_session(username)
+    state_mgr.add_log("Mobile app login successful", category="AUTH", user=username)
+    return jsonify({"success": True, "token": mobile_token, "expires_at": expires_at,
+                    "user": {"name": user.get("name", username), "role": user.get("role", "VIEWER")}})
+
+
+@app.route('/api/mobile/logout', methods=['POST'])
+def mobile_logout():
+    token, user = _mobile_authenticated_user()
+    if not user:
+        return jsonify({"success": False, "message": "Login required."}), 401
+    data = request.get_json(silent=True) or {}
+    from src.mobile_service import remove_device, revoke_mobile_session
+    fcm_token = str(data.get("fcm_token", "")).strip()
+    if fcm_token:
+        remove_device(user.get("id", ""), fcm_token)
+    revoke_mobile_session(token)
+    return jsonify({"success": True})
+
+
+@app.route('/api/mobile/snapshot', methods=['GET'])
+def mobile_snapshot():
+    _, user = _mobile_authenticated_user()
+    if not user:
+        return jsonify({"success": False, "message": "Login required."}), 401
+    snapshot = state_mgr.get_state().get("mobile_market_snapshot")
+    if not snapshot:
+        return jsonify({"success": True, "ready": False,
+                        "message": "Open the dashboard and refresh market data to load the first signal."})
+    from datetime import datetime, timezone
+    try:
+        age_seconds = max(0, int((datetime.now(timezone.utc) - datetime.fromisoformat(snapshot["as_of"])).total_seconds()))
+    except (KeyError, TypeError, ValueError):
+        age_seconds = None
+    return jsonify({"success": True, "ready": True, "snapshot": snapshot,
+                    "age_seconds": age_seconds, "is_stale": age_seconds is None or age_seconds > 300})
+
+
+@app.route('/api/mobile/refresh', methods=['POST'])
+def mobile_refresh():
+    _, user = _mobile_authenticated_user()
+    if not user:
+        return jsonify({"success": False, "message": "Login required."}), 401
+    # Reuse the dashboard's market-data refresh path; it fetches data and builds
+    # a recommendation but does not submit or execute any orders.
+    with app.test_request_context('/api/refresh', method='POST', json={"symbol": "NATGASMINI"}):
+        return refresh_market_data()
+
+
+@app.route('/api/mobile/device', methods=['POST', 'DELETE'])
+def mobile_device():
+    _, user = _mobile_authenticated_user()
+    if not user:
+        return jsonify({"success": False, "message": "Login required."}), 401
+    data = request.get_json(silent=True) or {}
+    fcm_token = str(data.get("fcm_token", "")).strip()
+    if not fcm_token or len(fcm_token) > 4096:
+        return jsonify({"success": False, "message": "A valid FCM device token is required."}), 400
+    from src.mobile_service import register_device, remove_device
+    if request.method == 'DELETE':
+        remove_device(user.get("id", session.get("username", "")), fcm_token)
+    else:
+        register_device(user.get("id", ""), fcm_token, "android")
+    return jsonify({"success": True})
+
 @app.route('/logout')
 def logout():
     u = session.get('username', 'Unknown')
@@ -251,6 +336,7 @@ def refresh_market_data():
     fut_symbol = construct_symbol(symbol, "FUT", expiry)
 
     try:
+        previous_market_price = state_mgr.get_state().get("market_price", 0.0)
         # Get broker instance - this handles all token refresh automatically
         broker = ensure_broker_connected()
 
@@ -836,9 +922,51 @@ def refresh_market_data():
                         "TREND_CHANGE", symbol, trend, details, expiry, atm_strike,
                         ltp, {"previous_trend": prior_trend, "new_trend": trend}
                     )
+                    push_snapshot = {
+                        "trend": trend,
+                        "price": round(float(ltp), 2),
+                        "strategy_label": rec_position.get("strategy_label", "WAIT / NO TRADE"),
+                        "as_of": datetime.now(TIMEZONE).isoformat(),
+                    }
+                    threading.Thread(
+                        target=__import__("src.mobile_service", fromlist=["send_trend_push"]).send_trend_push,
+                        args=(push_snapshot,), daemon=True,
+                    ).start()
 
                 # Store in state for persistence
                 state_mgr.update("recommended_position", rec_position)
+                try:
+                    previous_price = float(previous_market_price or 0.0)
+                    current_price = float(ltp)
+                except (TypeError, ValueError):
+                    previous_price, current_price = 0.0, 0.0
+                price_change = round(current_price - previous_price, 2) if previous_price else None
+                mobile_snapshot = {
+                    "symbol": symbol,
+                    "trend": trend,
+                    "signal_status": details.get("signal_status", "UNKNOWN"),
+                    "price": round(current_price, 2),
+                    "price_change": price_change,
+                    "price_change_percent": round((price_change / previous_price) * 100, 2) if price_change is not None and previous_price else None,
+                    "atm_strike": atm_strike,
+                    "expiry": expiry,
+                    "ce_price": details.get("ce_close", 0),
+                    "ce_ma9": details.get("ce_ma9", 0),
+                    "pe_price": details.get("pe_close", 0),
+                    "pe_ma9": details.get("pe_ma9", 0),
+                    "strategy_label": rec_position.get("strategy_label", "WAIT / NO TRADE"),
+                    "trade_direction": rec_position.get("direction", "WAIT"),
+                    "trade_status": rec_position.get("status", "WAIT"),
+                    "trade_approved": bool(rec_position.get("trade_approved", False)),
+                    "rationale": rec_position.get("rationale", ""),
+                    "legs": [{"action": leg.get("action"), "instrument": leg.get("instrument"),
+                              "strike": leg.get("strike"), "option_type": leg.get("option_type"),
+                              "quantity": leg.get("qty"), "price": leg.get("premium"),
+                              "symbol": leg.get("symbol")}
+                             for leg in rec_position.get("legs", [])],
+                    "as_of": datetime.now(TIMEZONE).isoformat(),
+                }
+                state_mgr.update("mobile_market_snapshot", mobile_snapshot)
 
             except Exception as te:
                 print(f"⚠️ Trend calculation failed: {te}")
@@ -1508,7 +1636,8 @@ def scan_strategy_history():
                                      expiry=expiry, atm_strike=atm, market_price=fut_now,
                                      payload={**payload, "details": detail}, scan_id=scan_id,
                                      sequence_no=sequence_no, candle_at=candle_at,
-                                     previous_trend=previous_trend, raw_trend=raw_trend)
+                                     previous_trend=previous_trend, raw_trend=raw_trend,
+                                     dedupe=True)
             if changed:
                 db.record_strategy_event("HISTORICAL_TREND_CHANGE", symbol=symbol, trend=trend,
                                          signal_status=detail["signal_status"],
@@ -1516,7 +1645,8 @@ def scan_strategy_history():
                                          expiry=expiry, atm_strike=atm, market_price=fut_now,
                                          payload=payload, scan_id=scan_id,
                                          sequence_no=sequence_no, candle_at=candle_at,
-                                         previous_trend=previous_trend, raw_trend=raw_trend)
+                                         previous_trend=previous_trend, raw_trend=raw_trend,
+                                         dedupe=True)
             records.append({"date": day, "trend": trend, "raw_trend": raw_trend, "signal_status": signal_status,
                             "futures_confirmation": futures_confirmation,
                             "ce": {"price": round(ce_now, 4), "ma9": round(ce_ma, 4), "crossed_below": ce_crossed_below, "crossed_above": ce_crossed_above},
