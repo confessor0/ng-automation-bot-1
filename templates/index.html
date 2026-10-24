@@ -2413,7 +2413,7 @@
                     const trendColor = latest?.trend === 'BULLISH' ? '#10b981' : latest?.trend === 'BEARISH' ? '#f87171' : '#cbd5e1';
                     if (trendEl) { trendEl.textContent = latest?.trend || 'WAITING FOR SCAN'; trendEl.style.color = trendColor; }
                     if (actionEl) { actionEl.textContent = latest?.trend === 'BULLISH' || latest?.trend === 'BEARISH' ? 'CONSIDER BASKET' : 'WAIT / NO TRADE'; actionEl.className = 'badge ' + (latest?.trend === 'BULLISH' ? 'badge-bullish' : latest?.trend === 'BEARISH' ? 'badge-bearish' : 'badge-neutral'); }
-                    if (reasonEl) reasonEl.textContent = latest ? `${latest.signal_status || 'No signal'} · Futures ${latest.futures_confirmation || '-'} · ${latest.raw_trend === latest.trend ? 'Confirmed signal' : 'Persisted trend'}` : 'Run a historical scan or refresh strategy data.';
+                    if (reasonEl) reasonEl.textContent = latest ? `${latest.signal_status || 'No signal'} · MA9 option closes are authoritative${latest.futures_confirmation ? ` · Futures context ${latest.futures_confirmation}` : ''}` : 'Run a historical scan or refresh strategy data.';
                     if (basketEl) basketEl.textContent = latest?.payload?.basket?.label || (latest?.trend === 'NEUTRAL' ? 'Consolidation / wait' : 'Trending market');
                     const sinceEl = document.getElementById('journalPersistedSince');
                     if (sinceEl) sinceEl.textContent = latestChange?.candle_at ? new Date(latestChange.candle_at).toLocaleDateString('en-IN') : (latest?.candle_at ? new Date(latest.candle_at).toLocaleDateString('en-IN') : '-');

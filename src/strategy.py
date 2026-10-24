@@ -137,7 +137,11 @@ class StrategyEngine:
         return trend, atm_strike, details
 
     def _analyze_strategy_2_completed_cross(self, fut_symbol, expiry):
-        """Evaluate paired option crosses and confirm them with futures action."""
+        """Evaluate completed option closes against MA9.
+
+        The option legs are the source of truth for the trend. Futures data is
+        retained as context only; it must not block a continuing MA9 trend.
+        """
         from src.config import TIMEZONE, is_market_open
 
         if not getattr(self.broker, "fyers", None):
@@ -198,21 +202,23 @@ class StrategyEngine:
         else:
             trend, status = "NEUTRAL", "NO_PAIRED_CROSS"
 
-        # A directional signal is actionable only when the futures candle agrees.
-        if trend in ("BULLISH", "BEARISH") and futures_confirmation != trend:
-            status = "CONFLICTING_FUTURES_CONFIRMATION"
-        elif trend == "NEUTRAL" and both_below and futures_confirmation in ("BULLISH", "BEARISH"):
-            # Options are below their averages while futures are directional:
-            # this is not a confirmed range; keep the result in WAIT.
-            status = "CONFLICTING_FUTURES_CONFIRMATION"
-
-        # A confirmed trend remains active until an opposite confirmed signal
-        # appears. This separates a continuing trend from a new MA9 cross.
+        # A confirmed trend remains active until an opposite option alignment
+        # appears. The completed CE/PE closes are the confirmation source;
+        # futures is displayed as context and never vetoes this decision.
         prior_confirmed = self.state_manager.get_state().get("ng_strategy_state", {}).get("trend_bias", "NEUTRAL")
-        if trend == "NEUTRAL" and prior_confirmed in ("BULLISH", "BEARISH"):
-            if futures_confirmation in ("CONSOLIDATION", prior_confirmed):
-                trend = prior_confirmed
-                status = f"TREND_CONTINUES_{prior_confirmed}"
+        bullish_alignment = pe_close < pe_ma and ce_close > ce_ma
+        bearish_alignment = ce_close < ce_ma and pe_close > pe_ma
+        if bullish_alignment:
+            trend = "BULLISH"
+            if status != "PAIRED_BULLISH_CROSS":
+                status = "TREND_CONTINUES_BULLISH"
+        elif bearish_alignment:
+            trend = "BEARISH"
+            if status != "PAIRED_BEARISH_CROSS":
+                status = "TREND_CONTINUES_BEARISH"
+        elif trend == "NEUTRAL" and prior_confirmed in ("BULLISH", "BEARISH") and both_below:
+            trend = prior_confirmed
+            status = f"TREND_CONTINUES_{prior_confirmed}"
 
         details = {
             "signal_rule": "STRATEGY_2", "signal_status": status,
@@ -221,6 +227,7 @@ class StrategyEngine:
             "ce_crossed_below": ce_crossed_below, "ce_crossed_above": ce_crossed_above,
             "pe_crossed_below": pe_crossed_below, "pe_crossed_above": pe_crossed_above,
             "both_below_ma9": both_below,
+            "bullish_alignment": bullish_alignment, "bearish_alignment": bearish_alignment,
             "futures_close": round(fut_close, 2), "futures_ma9": round(fut_ma, 2),
             "futures_confirmation": futures_confirmation,
             "futures_prev_close": round(fut_prev, 2), "futures_prev_ma9": round(fut_prev_ma, 2),

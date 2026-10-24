@@ -55,13 +55,8 @@ def build_recommendation(
     symbol_builder = symbol_builder or (lambda _base, _kind, _expiry, strike, opt: f"{strike}{opt}")
     base = "NATGASMINI"
 
-    if not cmp or not atm_strike or (trend != "NEUTRAL" and futures_confirmation not in ("BULLISH", "BEARISH")):
-        return _wait("WAIT", "Futures price-action confirmation is required before recommending a position.", cmp, atm_strike, expiry, signal_status)
-
-    if trend == "BULLISH" and futures_confirmation != "BULLISH":
-        return _wait("WAIT", "Bullish option signal conflicts with futures price action.", cmp, atm_strike, expiry, signal_status)
-    if trend == "BEARISH" and futures_confirmation != "BEARISH":
-        return _wait("WAIT", "Bearish option signal conflicts with futures price action.", cmp, atm_strike, expiry, signal_status)
+    if not cmp or not atm_strike:
+        return _wait("WAIT", "A valid price and ATM strike are required before showing a basket.", cmp, atm_strike, expiry, signal_status)
 
     ce_symbol = symbol_builder(base, "OPT", expiry, atm_strike, "CE")
     pe_symbol = symbol_builder(base, "OPT", expiry, atm_strike, "PE")
@@ -91,19 +86,15 @@ def build_recommendation(
             _leg("BUY", "OPT", call_strike, "CE", 10, symbol_builder(base, "OPT", expiry, call_strike, "CE"), quote(symbol_builder(base, "OPT", expiry, call_strike, "CE"))),
         ]
         validation = _validation(legs, premiums_available=premiums_available, hedge_valid=hedge_valid)
-        # Neutral legs are useful as a trade plan even before the range is
-        # confirmed. Keep them visible, but do not mark them executable.
-        if futures_confirmation != "CONSOLIDATION":
-            validation["execution_ready"] = False
         return {
             "strategy": "STRATEGY_2",
             "strategy_label": "Consolidation Markets",
             "direction": "NEUTRAL",
             "status": "READY" if validation["execution_ready"] else "CONSIDER",
             "signal_status": signal_status,
-            "rationale": (("Range-bound futures action with a protected ATM straddle."
-                           if futures_confirmation == "CONSOLIDATION"
-                           else "Neutral options setup to consider; wait for futures consolidation confirmation before execution.")
+            "rationale": (("Both ATM option closes are below MA9; protected consolidation basket."
+                           if futures_confirmation != "CONSOLIDATION"
+                           else "Range-bound options action with a protected ATM straddle.")
                           + (" Dynamic premium hedge strikes are invalid at current premiums; review fallback wings before execution." if not hedge_valid else "")),
             "market_context": {"current_price": cmp, "atm_strike": atm_strike, "expiry": expiry, "combined_premium": round(combined_premium, 4), "hedge_rule": "S ± (ATM CE + ATM PE), rounded to valid strike"},
             "legs": legs,
@@ -120,7 +111,7 @@ def build_recommendation(
             _leg("SELL", "OPT", atm_strike, "PE", 4, pe_symbol, pe_premium),
         ]
         label = "Trending Markets — Bullish"
-        rationale = "ATM PE crossed below MA9 and ATM CE crossed above MA9, confirmed by bullish futures price action."
+        rationale = "Completed ATM PE close is below MA9 and ATM CE close is above MA9."
     elif trend == "BEARISH":
         legs = [
             _leg("BUY", "OPT", atm_strike, "CE", 12, ce_symbol, ce_premium),
@@ -130,7 +121,7 @@ def build_recommendation(
             _leg("SELL", "OPT", atm_strike, "PE", 4, pe_symbol, pe_premium),
         ]
         label = "Trending Markets — Bearish"
-        rationale = "ATM CE crossed below MA9 and ATM PE crossed above MA9, confirmed by bearish futures price action."
+        rationale = "Completed ATM CE close is below MA9 and ATM PE close is above MA9."
     else:
         return _wait("STRATEGY_1", "Signals are neutral; use the protected consolidation structure only when range conditions and premiums are confirmed.", cmp, atm_strike, expiry, signal_status)
 

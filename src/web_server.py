@@ -1431,15 +1431,19 @@ def scan_strategy_history():
             else:
                 raw_trend, signal_status = "NEUTRAL", "NO_PAIRED_CROSS"
             trend = raw_trend
-            if trend in ("BULLISH", "BEARISH") and futures_confirmation != trend:
-                signal_status = "CONFLICTING_FUTURES_CONFIRMATION"
-            elif trend == "NEUTRAL" and both_below and futures_confirmation in ("BULLISH", "BEARISH"):
-                signal_status = "CONFLICTING_FUTURES_CONFIRMATION"
-
-            # Carry the last confirmed direction across ordinary days. A
-            # trend changes only on an opposite confirmed paired cross.
-            if raw_trend == "NEUTRAL" and previous_trend in ("BULLISH", "BEARISH") and \
-                    futures_confirmation in ("CONSOLIDATION", previous_trend):
+            # Completed option closes versus MA9 are the trend confirmation.
+            # Futures remains diagnostic context and never vetoes the setup.
+            bullish_alignment = pe_now < pe_ma and ce_now > ce_ma
+            bearish_alignment = ce_now < ce_ma and pe_now > pe_ma
+            if bullish_alignment:
+                trend = "BULLISH"
+                if signal_status != "PAIRED_BULLISH_CROSS":
+                    signal_status = "TREND_CONTINUES_BULLISH"
+            elif bearish_alignment:
+                trend = "BEARISH"
+                if signal_status != "PAIRED_BEARISH_CROSS":
+                    signal_status = "TREND_CONTINUES_BEARISH"
+            elif raw_trend == "NEUTRAL" and previous_trend in ("BULLISH", "BEARISH") and both_below:
                 trend = previous_trend
                 signal_status = f"TREND_CONTINUES_{previous_trend}"
 
@@ -1452,6 +1456,7 @@ def scan_strategy_history():
                       "pe_close": round(pe_now, 4), "pe_ma9": round(pe_ma, 4),
                       "futures_close": round(fut_now, 4), "futures_ma9": round(fut_ma, 4),
                       "futures_confirmation": futures_confirmation,
+                      "bullish_alignment": bullish_alignment, "bearish_alignment": bearish_alignment,
                       "completed_candle_epoch": dated["fut"][day]["epoch"]}
             basket = {"strategy": "STRATEGY_1" if trend in ("BULLISH", "BEARISH") else "STRATEGY_2",
                       "label": "Trending Markets" if trend in ("BULLISH", "BEARISH") else "Consolidation Markets",
