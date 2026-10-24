@@ -160,7 +160,7 @@ class OrderIntentEngine:
                         ("BUY", atm_strike - 2 * interval, "CE", 6),
                         ("SELL", atm_strike, "CE", 4), ("SELL", atm_strike, "PE", 4)]
             else:
-                legs = [("BUY", atm_strike, "CE", 12), ("SELL", None, None, 6),
+                legs = [("BUY", atm_strike - interval, "CE", 12), ("SELL", None, None, 6),
                         ("BUY", atm_strike + 4 * interval, "PE", 6),
                         ("SELL", atm_strike, "CE", 4), ("SELL", atm_strike, "PE", 4)]
             orders = []

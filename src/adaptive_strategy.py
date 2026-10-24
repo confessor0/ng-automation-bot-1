@@ -114,7 +114,7 @@ def build_recommendation(
         rationale = "Completed ATM PE close is below MA9 and ATM CE close is above MA9."
     elif trend == "BEARISH":
         legs = [
-            _leg("BUY", "OPT", atm_strike, "CE", 12, ce_symbol, ce_premium),
+            _leg("BUY", "OPT", atm_strike - option_interval, "CE", 12),
             _leg("SELL", "FUT", None, None, 6),
             _leg("BUY", "OPT", atm_strike + (4 * option_interval), "PE", 6),
             _leg("SELL", "OPT", atm_strike, "CE", 4, ce_symbol, ce_premium),
