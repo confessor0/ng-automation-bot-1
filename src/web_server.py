@@ -11,6 +11,7 @@ import threading
 from functools import wraps
 from datetime import datetime
 from src.state_manager import StateManager
+from src.config import TIMEZONE
 from colorama import Fore, Style
 import os
 import secrets
@@ -1367,12 +1368,12 @@ def scan_strategy_history():
             result = {}
             for _, row in frame.iterrows():
                 stamp = float(row["epoch"])
-                day = datetime.fromtimestamp(stamp).strftime("%Y-%m-%d")
+                day = datetime.fromtimestamp(stamp, TIMEZONE).strftime("%Y-%m-%d")
                 result[day] = {"epoch": int(stamp), "close": float(row["close"])}
             return result
 
         dated = {name: by_date(frame) for name, frame in frames.items()}
-        today_key = datetime.now().strftime("%Y-%m-%d")
+        today_key = datetime.now(TIMEZONE).strftime("%Y-%m-%d")
         common_dates = sorted((set(dated["fut"]) & set(dated["ce"]) & set(dated["pe"])) - {today_key})
         if len(common_dates) < 10:
             summary = {"scan_id": scan_id, "status": "INSUFFICIENT_HISTORY",

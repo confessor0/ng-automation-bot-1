@@ -2,6 +2,7 @@ import sqlite3
 import json
 import os
 from datetime import datetime
+from src.config import TIMEZONE
 
 class UnifiedOrderManager:
     """
@@ -110,7 +111,7 @@ class UnifiedOrderManager:
 
     def upsert_basket(self, basket_data: dict):
         """Insert or update a basket"""
-        now = datetime.now().isoformat()
+        now = datetime.now(TIMEZONE).isoformat()
         with sqlite3.connect(self.DB_PATH) as conn:
             cursor = conn.cursor()
             
@@ -253,7 +254,7 @@ class UnifiedOrderManager:
                               expiry=None, atm_strike=None, market_price=None,
                               payload=None, occurred_at=None):
         """Persist one strategy observation without replacing earlier events."""
-        occurred_at = occurred_at or datetime.now().isoformat()
+        occurred_at = occurred_at or datetime.now(TIMEZONE).isoformat()
         with sqlite3.connect(self.DB_PATH) as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -289,7 +290,7 @@ class UnifiedOrderManager:
 
     def save_simulation(self, simulation_id, basket_id, entry_at, exit_at,
                         quantity_multiplier, input_data, result_data):
-        created_at = datetime.now().isoformat()
+        created_at = datetime.now(TIMEZONE).isoformat()
         with sqlite3.connect(self.DB_PATH) as conn:
             conn.execute("""
                 INSERT INTO simulations
@@ -324,7 +325,7 @@ class UnifiedOrderManager:
                 (scan_id, created_at, symbol, days_requested, from_date,
                  to_date, status, summary)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (scan_id, datetime.now().isoformat(), symbol, days_requested,
+            """, (scan_id, datetime.now(TIMEZONE).isoformat(), symbol, days_requested,
                   from_date, to_date, status, json.dumps(summary, default=str)))
             conn.commit()
 
