@@ -134,16 +134,25 @@ class TradingBot:
                 db = UnifiedOrderManager.get_instance()
                 payload = {"previous_trend": prev_trend, "trend_changed": prev_trend != trend,
                            "details": details, "sustained_candles": sustained}
-                db.record_strategy_event("TREND_ANALYSIS", symbol, trend,
-                                         details, expiry, atm_strike, market_price, payload)
+                db.record_strategy_event("TREND_ANALYSIS", symbol=symbol, trend=trend,
+                                         signal_status=details.get("signal_status"),
+                                         futures_confirmation=details.get("futures_confirmation"),
+                                         expiry=expiry, atm_strike=atm_strike,
+                                         market_price=market_price, payload=payload)
                 if details.get("futures_confirmation"):
-                    db.record_strategy_event("FUTURES_CONFIRMATION", symbol, trend,
-                                             details, expiry, atm_strike, market_price,
-                                             {"confirmation": details.get("futures_confirmation")})
+                    db.record_strategy_event("FUTURES_CONFIRMATION", symbol=symbol, trend=trend,
+                                             signal_status=details.get("signal_status"),
+                                             futures_confirmation=details.get("futures_confirmation"),
+                                             expiry=expiry, atm_strike=atm_strike,
+                                             market_price=market_price,
+                                             payload={"confirmation": details.get("futures_confirmation")})
                 if prev_trend != trend:
-                    db.record_strategy_event("TREND_CHANGE", symbol, trend,
-                                             details, expiry, atm_strike, market_price,
-                                             {"previous_trend": prev_trend, "new_trend": trend})
+                    db.record_strategy_event("TREND_CHANGE", symbol=symbol, trend=trend,
+                                             signal_status=details.get("signal_status"),
+                                             futures_confirmation=details.get("futures_confirmation"),
+                                             expiry=expiry, atm_strike=atm_strike,
+                                             market_price=market_price,
+                                             payload={"previous_trend": prev_trend, "new_trend": trend})
             except Exception as event_error:
                 print(f"⚠️ Strategy event persistence failed: {event_error}")
 
