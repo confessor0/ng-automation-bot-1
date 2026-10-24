@@ -260,6 +260,12 @@ def home():
         import traceback
         return f"<h1>Error Rendering Template</h1><pre>{traceback.format_exc()}</pre>", 500
 
+@app.route('/simulator')
+@login_required
+def simulator_page():
+    """Dedicated decision-support simulator page; it never submits orders."""
+    return render_template('simulator.html')
+
 @app.route('/api/state')
 def get_state():
     import json

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NG Strategy Simulator</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    :root { --ng-bg:#08111f; --ng-card:#101c2e; --ng-border:#263750; --ng-blue:#60a5fa; --ng-muted:#8da0b8; }
+    body { background:radial-gradient(circle at 12% 0%,#172b49 0,#08111f 42rem); min-height:100vh; color:#e8eef7; }
+    .shell { max-width:1500px; }
+    .card { background:rgba(16,28,46,.92); border:1px solid var(--ng-border); box-shadow:0 18px 50px rgba(0,0,0,.18); }
+    .brand { color:#dbeafe; letter-spacing:.02em; }
+    .muted { color:var(--ng-muted); }
+    .metric { min-height:92px; }
+    .metric .value { font-size:1.35rem; font-weight:800; }
+    .trend-bullish { color:#34d399; } .trend-bearish { color:#fb7185; } .trend-neutral { color:#cbd5e1; }
+    .table { --bs-table-bg:transparent; --bs-table-color:#dbe5f3; --bs-table-border-color:#263750; font-size:.83rem; vertical-align:middle; }
+    .form-control,.form-select { background:#0b1728; border-color:#31435f; color:#e8eef7; }
+    .form-control:focus,.form-select:focus { background:#0b1728; color:#fff; border-color:#60a5fa; box-shadow:0 0 0 .2rem rgba(96,165,250,.15); }
+    .section-title { font-size:.78rem; font-weight:800; color:#9fb3ce; letter-spacing:.09em; text-transform:uppercase; }
+    .badge-soft { background:#1b2b43; color:#bcd0e8; }
+    .result-positive { color:#34d399; } .result-negative { color:#fb7185; }
+    .sticky-tools { position:sticky; top:0; z-index:5; background:rgba(8,17,31,.9); backdrop-filter:blur(12px); }
+    .chart-wrap { min-height:310px; }
+    .small-note { font-size:.74rem; color:var(--ng-muted); }
+  </style>
+</head>
+<body>
+<main class="container-fluid shell py-3" x-data="simulatorApp()" x-init="init()">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+    <div><div class="h4 brand mb-1">📊 NG Strategy Simulator</div><div class="muted small">Trend-based basket replay and what-if analysis · decision support only</div></div>
+    <div class="d-flex gap-2"><a href="/" class="btn btn-outline-light btn-sm">← Dashboard</a><a href="/logout" class="btn btn-outline-secondary btn-sm">Logout</a></div>
+  </div>
+
+  <div class="alert alert-warning py-2 small mb-3"><strong>Simulation only.</strong> Results never submit, approve, or modify a Fyers order. Prices marked manual or estimated must be verified before use.</div>
+
+  <div class="card sticky-tools mb-3"><div class="card-body py-2"><div class="row g-2 align-items-center">
+    <div class="col-lg-4"><label class="section-title mb-1">Simulation source</label><select class="form-select form-select-sm" x-model="sourceKey" @change="selectSource()"><option value="">Choose active basket or saved trend signal</option><option value="manual">Manual basket</option><template x-for="source in sources" :key="source.key"><option :value="source.key" x-text="source.label"></option></template></select></div>
+    <div class="col-lg-3"><label class="section-title mb-1">Strategy / trend</label><div class="form-control form-control-sm"><span x-text="plan.strategy || 'Not selected'"></span><span class="float-end" :class="trendClass(plan.trend)" x-text="plan.trend || ''"></span></div></div>
+    <div class="col-lg-2"><label class="section-title mb-1">Expiry</label><div class="form-control form-control-sm" x-text="plan.expiry || '—'"></div></div>
+    <div class="col-lg-3 text-lg-end pt-3"><button class="btn btn-primary btn-sm" @click="runAllScenarios()" :disabled="busy || !legs.length">▶ Run 3 scenarios</button> <button class="btn btn-outline-info btn-sm" @click="runScenario('BASE')" :disabled="busy || !legs.length">Run base</button></div>
+  </div></div></div>
+
+  <div class="row g-3 mb-3">
+    <div class="col-12 col-xl-8"><div class="card h-100"><div class="card-body">
+      <div class="d-flex justify-content-between align-items-center mb-3"><div><div class="section-title">Source evidence</div><div class="h5 mb-0" x-text="plan.signalStatus || 'Select a source'"></div></div><span class="badge badge-soft" x-text="plan.dataQuality || 'NO DATA'"></span></div>
+      <div class="row g-2"><div class="col-md-3 metric"><div class="muted small">Market price</div><div class="value" x-text="money(plan.marketPrice)"></div></div><div class="col-md-3 metric"><div class="muted small">ATM strike</div><div class="value" x-text="plan.atmStrike || '—'"></div></div><div class="col-md-3 metric"><div class="muted small">Signal candle</div><div class="value fs-6" x-text="plan.candleAt || '—'"></div></div><div class="col-md-3 metric"><div class="muted small">Rationale</div><div class="small" x-text="plan.rationale || 'Choose a trend signal to see the basket rule.'"></div></div></div>
+      <div class="row g-2 mt-2"><div class="col-md-4"><div class="muted small">CE close / MA9</div><div x-text="evidence.ce || '—'"></div></div><div class="col-md-4"><div class="muted small">PE close / MA9</div><div x-text="evidence.pe || '—'"></div></div><div class="col-md-4"><div class="muted small">Futures context</div><div x-text="evidence.futures || '—'"></div></div></div>
+    </div></div></div>
+    <div class="col-12 col-xl-4"><div class="card h-100"><div class="card-body"><div class="section-title mb-2">Simulation assumptions</div><div class="row g-2"><div class="col-6"><label class="small-note">Entry (IST)<input class="form-control form-control-sm" type="datetime-local" x-model="form.entryAt"></label></div><div class="col-6"><label class="small-note">Exit (IST)<input class="form-control form-control-sm" type="datetime-local" x-model="form.exitAt"></label></div><div class="col-6"><label class="small-note">Underlying / ATM<input class="form-control form-control-sm" type="number" step=".01" x-model="form.underlying"></label></div><div class="col-6"><label class="small-note">Lot size<input class="form-control form-control-sm" type="number" min="1" x-model="form.lotSize"></label></div><div class="col-6"><label class="small-note">Quantity multiplier<input class="form-control form-control-sm" type="number" min=".01" step=".01" x-model="form.multiplier"></label></div><div class="col-6"><label class="small-note">Capital available<input class="form-control form-control-sm" type="number" min="0" x-model="form.capital"></label></div><div class="col-6"><label class="small-note">Exit rule<select class="form-select form-select-sm" x-model="form.exitReason"><option value="CUSTOM_EXIT">Custom exit</option><option value="FIXED_HOLDING">Fixed holding</option><option value="TARGET">Target reached</option><option value="STOP_LOSS">Stop loss</option><option value="OPPOSITE_CONFIRMED_TREND">Opposite confirmed trend</option><option value="EXPIRY">Expiry</option></select></label></div><div class="col-6"><label class="small-note">Margin rate %<input class="form-control form-control-sm" type="number" min="0" step=".1" x-model="form.marginRate"></label></div></div><details class="mt-3"><summary class="small-note">Costs and fill assumptions</summary><div class="row g-2 mt-1"><div class="col-4"><label class="small-note">Brokerage/qty<input class="form-control form-control-sm" type="number" min="0" step=".01" x-model="form.brokerage"></label></div><div class="col-4"><label class="small-note">Taxes %<input class="form-control form-control-sm" type="number" min="0" step=".001" x-model="form.tax"></label></div><div class="col-4"><label class="small-note">Slippage %<input class="form-control form-control-sm" type="number" min="0" step=".01" x-model="form.slippage"></label></div></div></details></div></div></div>
+  </div>
+
+  <div class="card mb-3"><div class="card-body"><div class="d-flex justify-content-between align-items-center mb-2"><div class="section-title">Basket legs</div><button class="btn btn-outline-secondary btn-sm" @click="addLeg()">+ Add leg</button></div><div class="table-responsive"><table class="table table-sm"><thead><tr><th>#</th><th>Contract</th><th>Side</th><th>Type / strike</th><th>Entry</th><th>Exit</th><th>Qty</th><th>Source</th><th></th></tr></thead><tbody><template x-for="(leg,index) in legs" :key="index"><tr><td x-text="leg.seq || index+1"></td><td><input class="form-control form-control-sm" x-model="leg.symbol"></td><td><select class="form-select form-select-sm" x-model="leg.side"><option>BUY</option><option>SELL</option></select></td><td><div class="d-flex gap-1"><select class="form-select form-select-sm" x-model="leg.instrument"><option>FUT</option><option>OPT</option></select><input class="form-control form-control-sm" style="max-width:90px" placeholder="Strike" x-model="leg.strike"><select class="form-select form-select-sm" style="max-width:75px" x-model="leg.option_type"><option value="">—</option><option>CE</option><option>PE</option></select></div></td><td><input class="form-control form-control-sm" type="number" min="0" step=".01" x-model="leg.entry"></td><td><input class="form-control form-control-sm" type="number" min="0" step=".01" x-model="leg.exit"></td><td><input class="form-control form-control-sm" type="number" min="1" step="1" x-model="leg.qty"></td><td><span class="badge badge-soft" x-text="leg.data_quality || 'MANUAL'"></span></td><td><button class="btn btn-sm btn-outline-danger" @click="legs.splice(index,1)">×</button></td></tr></template><tr x-show="!legs.length"><td colspan="9" class="text-center muted py-4">Choose an active basket or historical signal to begin.</td></tr></tbody></table></div></div></div>
+
+  <div class="row g-3 mb-3"><div class="col-xl-7"><div class="card h-100"><div class="card-body"><div class="d-flex justify-content-between"><div class="section-title">Expiry payoff profile</div><span class="small-note">Native Chart.js · estimate from described legs</span></div><div class="chart-wrap"><canvas id="payoffChart"></canvas></div></div></div></div><div class="col-xl-5"><div class="card h-100"><div class="card-body"><div class="section-title mb-2">Latest result</div><div x-show="!latestResult" class="muted small py-5 text-center">Run a scenario to see P&L, risk, and payoff information.</div><template x-if="latestResult"><div><div class="d-flex justify-content-between align-items-center"><span class="badge" :class="latestResult.total_pnl >= 0 ? 'text-bg-success' : 'text-bg-danger'" x-text="latestResult.scenario || 'BASE'"></span><span class="h3 mb-0" :class="latestResult.total_pnl >= 0 ? 'result-positive' : 'result-negative'" x-text="money(latestResult.total_pnl)"></span></div><div class="row g-2 small mt-3"><div class="col-6">Gross P&L <strong class="float-end" x-text="money(latestResult.gross_pnl)"></strong></div><div class="col-6">Charges <strong class="float-end" x-text="money(latestResult.total_charges)"></strong></div><div class="col-6">Est. margin <strong class="float-end" x-text="money(latestResult.estimated_margin)"></strong></div><div class="col-6">Return/capital <strong class="float-end" x-text="(latestResult.return_on_capital_pct ?? '—') + '%' "></strong></div><div class="col-6">Max loss <strong class="float-end" x-text="money(latestResult.max_loss_estimate)"></strong></div><div class="col-6">Max profit <strong class="float-end" x-text="money(latestResult.max_profit_estimate)"></strong></div></div><div class="small-note mt-3">Break-even: <span x-text="(latestResult.break_evens || []).join(', ') || '—'"></span></div><div class="alert alert-warning py-2 mt-3 mb-0 small" x-show="latestResult.risk_warnings?.length"><ul class="mb-0"><template x-for="warning in latestResult.risk_warnings"><li x-text="warning"></li></template></ul></div></div></template></div></div></div></div>
+
+  <div class="card mb-3"><div class="card-body"><div class="d-flex justify-content-between align-items-center mb-2"><div class="section-title">Scenario results</div><span class="small-note">Each saved run is linked to its source signal or basket.</span></div><div class="table-responsive"><table class="table table-sm"><thead><tr><th>Scenario</th><th>Simulation</th><th>Net P&L</th><th>Margin</th><th>Return/capital</th><th>Exit rule</th><th>Data</th></tr></thead><tbody><template x-for="result in results" :key="result.simulation_id"><tr><td x-text="result.scenario"></td><td class="font-monospace" x-text="result.simulation_id"></td><td :class="result.total_pnl >= 0 ? 'result-positive' : 'result-negative'" x-text="money(result.total_pnl)"></td><td x-text="money(result.estimated_margin)"></td><td x-text="(result.return_on_capital_pct ?? '—') + '%' "></td><td x-text="result.exit_reason"></td><td x-text="result.data_quality"></td></tr></template><tr x-show="!results.length"><td colspan="7" class="text-center muted py-3">No saved scenarios yet.</td></tr></tbody></table></div></div></div>
+
+  <div class="card"><div class="card-body"><div class="d-flex justify-content-between align-items-center mb-2"><div class="section-title">Saved simulation history</div><button class="btn btn-outline-secondary btn-sm" @click="loadHistory()">Refresh</button></div><div class="table-responsive"><table class="table table-sm"><thead><tr><th>Created (IST)</th><th>Simulation</th><th>Source</th><th>Net P&L</th><th>Entry → Exit</th></tr></thead><tbody><template x-for="simulation in history" :key="simulation.simulation_id"><tr><td x-text="formatTime(simulation.created_at)"></td><td class="font-monospace" x-text="simulation.simulation_id"></td><td x-text="simulation.input_data?.strategy || simulation.basket_id || 'Manual'"></td><td :class="simulation.result_data?.total_pnl >= 0 ? 'result-positive' : 'result-negative'" x-text="money(simulation.result_data?.total_pnl)"></td><td x-text="formatTime(simulation.entry_at) + ' → ' + formatTime(simulation.exit_at)"></td></tr></template><tr x-show="!history.length"><td colspan="5" class="text-center muted py-3">No saved simulations.</td></tr></tbody></table></div></div></div>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.8/dist/cdn.min.js"></script>
+<script>
+function simulatorApp() {
+  const now = new Date(); const later = new Date(now.getTime() + 24*3600*1000);
+  const localIso = d => new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString().slice(0,16);
+  return {
+    busy:false, sourceKey:'', sources:[], legs:[], history:[], results:[], latestResult:null, plan:{}, evidence:{}, chart:null,
+    form:{entryAt:localIso(now), exitAt:localIso(later), underlying:'', lotSize:1250, multiplier:1, capital:'', exitReason:'CUSTOM_EXIT', marginRate:12, brokerage:0, tax:0, slippage:0},
+    async init(){ await Promise.all([this.loadSources(), this.loadHistory()]); },
+    async loadSources(){
+      const [basketResponse,eventResponse,stateResponse] = await Promise.all([fetch('/api/orders/master?limit=50'),fetch('/api/strategy/events?limit=150&symbol=NATGASMINI'),fetch('/api/state')]);
+      const baskets=(await basketResponse.json()).baskets||[], events=(await eventResponse.json()).events||[], state=await stateResponse.json();
+      this.sources=baskets.map(b=>({key:'basket:'+b.basket_id,label:'ACTIVE BASKET · '+(b.strategy_name||b.basket_id)+' · '+(b.direction||b.status),type:'basket',id:b.basket_id}));
+      events.filter(e=>['HISTORICAL_SIGNAL','HISTORICAL_TREND_CHANGE'].includes(e.event_type)).forEach(e=>this.sources.push({key:'event:'+e.id,label:(e.candle_at||'').slice(0,10)+' · '+(e.trend||'NEUTRAL')+' · '+e.signal_status,type:'event',id:e.id}));
+      const rec=state.recommended_position||{}; if(!this.sources.length && rec.legs?.length) this.applyPlan({strategy:rec.strategy_label||'ACTIVE RECOMMENDATION',trend:rec.direction,legs:rec.legs,marketPrice:rec.market_context?.current_price});
+    },
+    async loadHistory(){ const r=await fetch('/api/simulations?limit=50'); const data=await r.json(); this.history=data.simulations||[]; },
+    async selectSource(){
+      if(this.sourceKey==='manual'){ this.resetPlan(); return; } if(!this.sourceKey) return;
+      this.busy=true; try { const [type,id]=this.sourceKey.split(':'); let data;
+        if(type==='basket'){ const r=await fetch('/api/orders/depth/'+encodeURIComponent(id)); const b=await r.json(); data={strategy:b.strategy_name||'BASKET',trend:b.direction||'NEUTRAL',legs:(b.orders||[]).map((o,i)=>({seq:o.seq||i+1,symbol:o.symbol,side:o.side,qty:o.qty,instrument:o.leg_type||(/FUT/i.test(o.symbol||'')?'FUT':'OPT'),entry:o.fill_price||o.ltp||0,exit:o.fill_price||o.ltp||0,data_quality:'MANUAL_ASSUMPTION'})),lotSize:1250,dataQuality:'MANUAL_ASSUMPTION',basketId:id}; }
+        else { const r=await fetch('/api/simulations/plan/'+encodeURIComponent(id)); const p=await r.json(); data={strategy:p.recommendation.strategy_label,trend:p.source_event.trend,signalStatus:p.source_event.signal_status,candleAt:p.source_event.candle_at,expiry:p.source_event.expiry,atmStrike:p.source_event.atm_strike,marketPrice:p.recommendation.market_context?.current_price,rationale:p.recommendation.rationale,lotSize:p.lot_size,dataQuality:'HISTORICAL_CLOSE',sourceEventId:id,legs:p.recommendation.legs.map((l,i)=>({seq:i+1,symbol:l.symbol,side:l.action,qty:l.qty,instrument:l.instrument,strike:l.strike,option_type:l.option_type,entry:l.premium||0,exit:l.premium||0,data_quality:l.data_quality}))}; }
+        this.applyPlan(data);
+      } catch(e){ alert(e.message||'Unable to load simulator source'); } finally { this.busy=false; }
+    },
+    applyPlan(data){ this.plan=data; this.legs=(data.legs||[]).map(l=>({...l,entry:l.entry??l.premium??0,exit:l.exit??l.premium??0})); this.form.lotSize=data.lotSize||1250; this.form.underlying=data.marketPrice||data.atmStrike||''; this.evidence={ce:data.ceEvidence,pe:data.peEvidence,futures:data.futuresEvidence}; },
+    resetPlan(){ this.plan={strategy:'Manual basket',trend:'NEUTRAL',dataQuality:'MANUAL_ASSUMPTION'}; this.legs=[]; this.addLeg(); },
+    addLeg(){ this.legs.push({seq:this.legs.length+1,symbol:'',side:'BUY',instrument:'OPT',option_type:'',strike:'',entry:0,exit:0,qty:1,data_quality:'MANUAL'}); },
+    trendClass(t){ return String(t||'').toLowerCase()==='bullish'?'trend-bullish':String(t||'').toLowerCase()==='bearish'?'trend-bearish':'trend-neutral'; },
+    money(v){ return v==null||v===''?'—':'₹'+Number(v||0).toLocaleString('en-IN',{minimumFractionDigits:2,maximumFractionDigits:2}); },
+    formatTime(v){ return v?new Date(v).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):'—'; },
+    async runAllScenarios(){ for(const scenario of ['BASE','CONSERVATIVE','TARGET']) await this.runScenario(scenario); },
+    async runScenario(scenario){
+      if(!this.legs.length) return; this.busy=true;
+      const legs=this.legs.map(l=>{ let exit=Number(l.exit||0); const sell=String(l.side||'BUY').toUpperCase()==='SELL'; if(scenario==='CONSERVATIVE') exit=sell?exit*1.1:exit*.9; if(scenario==='TARGET') exit=sell?exit*.9:exit*1.1; return {...l,exit}; });
+      const entryPrices={},exitPrices={},quantities={};
+      legs.forEach((l,i)=>{const k=String(l.seq||i+1); entryPrices[k]=l.entry; exitPrices[k]=l.exit; quantities[k]=l.qty;});
+      try { const r=await fetch('/api/simulations',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({basket_id:this.plan.basketId,source_event_id:this.plan.sourceEventId,strategy:this.plan.strategy,entry_at:this.form.entryAt,exit_at:this.form.exitAt,quantity_multiplier:this.form.multiplier,lot_size:this.form.lotSize,underlying_price:this.form.underlying,capital_available:this.form.capital,exit_reason:scenario==='BASE'?this.form.exitReason:scenario,data_quality:this.plan.dataQuality||'MANUAL_ASSUMPTION',legs,entry_prices:entryPrices,exit_prices:exitPrices,quantities,charges:{brokerage_per_quantity:this.form.brokerage,tax_percent:this.form.tax,slippage_percent:this.form.slippage,margin_rate:this.form.marginRate}})}); const data=await r.json(); if(!data.simulation) throw new Error(data.message||'Simulation failed'); data.simulation.scenario=scenario; this.results=[data.simulation,...this.results.filter(x=>x.scenario!==scenario)]; this.latestResult=data.simulation; this.drawChart(data.simulation.payoff_profile||[]); await this.loadHistory(); } catch(e){ alert(e.message||'Simulation failed'); } finally { this.busy=false; }
+    },
+    drawChart(points){ if(!window.Chart) return; const ctx=document.getElementById('payoffChart'); if(this.chart) this.chart.destroy(); this.chart=new Chart(ctx,{type:'line',data:{labels:points.map(p=>p.underlying_price),datasets:[{label:'Estimated expiry P&L',data:points.map(p=>p.pnl),borderColor:'#60a5fa',backgroundColor:'rgba(96,165,250,.18)',fill:true,tension:.25}]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{title:{display:true,text:'Underlying price'}},y:{title:{display:true,text:'P&L (₹)'}}},plugins:{legend:{labels:{color:'#dbe5f3'}}}}}); }
+  }
+}
+</script>
+</body>
+</html>
