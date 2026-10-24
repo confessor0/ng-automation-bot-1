@@ -1137,11 +1137,30 @@
                 <!-- Content will be dynamically injected by refreshData() -->
                 <div style="text-align: center; padding: 40px; color: #64748b;">
                     <div style="font-size: 36px; margin-bottom: 16px; opacity: 0.5;">🔄</div>
-                    <div style="font-size: 16px; font-weight: 600;">Click "Refresh Data" to Load Recommendations</div>
+                    <div style="font-size: 16px; font-weight: 600;">Waiting for the latest strategy state</div>
                     <div style="font-size: 12px; margin-top: 8px; color: #475569;">
-                        Position recommendations load on-demand to save API quota
+                        Use Refresh Data when you want to fetch new market candles and premiums
                     </div>
                 </div>
+            </div>
+
+            <div class="card" id="adaptiveStrategyGuide" style="margin-bottom:24px; border:1px solid rgba(96,165,250,0.3);">
+                <div class="card-title">🧭 Adaptive MCX Natural Gas Strategy Guide</div>
+                <div id="adaptiveStrategyStatus" style="padding:10px 12px; margin-bottom:14px; border-radius:8px; background:rgba(148,163,184,0.1); color:#cbd5e1; font-size:13px;">
+                    Reading the latest completed-candle signal…
+                </div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+                    <div style="padding:14px;border-radius:8px;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.18);">
+                        <div style="font-weight:800;color:#10b981;margin-bottom:7px;">Strategy 1 · Trending</div>
+                        <div style="font-size:12px;color:#cbd5e1;line-height:1.55;">Bullish: buy ATM PE 12, buy futures 6, buy ITM CE 6, sell ATM CE/PE 4 each.</div>
+                        <div style="font-size:12px;color:#cbd5e1;line-height:1.55;margin-top:5px;">Bearish: buy ATM CE 12, sell futures 6, buy protective PE 6, sell ATM CE/PE 4 each.</div>
+                    </div>
+                    <div style="padding:14px;border-radius:8px;background:rgba(96,165,250,0.06);border:1px solid rgba(96,165,250,0.18);">
+                        <div style="font-weight:800;color:#60a5fa;margin-bottom:7px;">Strategy 2 · Consolidation</div>
+                        <div style="font-size:12px;color:#cbd5e1;line-height:1.55;">Sell ATM CE and PE 10 each. Buy 10-lot hedges at S − (CE+PE premium) and S + (CE+PE premium), rounded to valid strikes.</div>
+                    </div>
+                </div>
+                <div id="activeBasketSummary" style="margin-top:14px;font-size:12px;color:#94a3b8;">Active basket: none. A basket appears after a confirmed signal and validation.</div>
             </div>
 
             <!-- Active Instruments Table Removed -->
@@ -1583,6 +1602,10 @@
             document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
             button.classList.add('active');
             target.classList.add('active');
+            if (tabId === 'master-console') {
+                pollOrderIntents();
+                pollMasterConsole();
+            }
         }
 
         function closeModal(modalId) {
@@ -1687,6 +1710,8 @@
                     updateStrategyUI(data);
                     updateAdjustmentStatus(data);
                     updatePendingSignal(data);
+                    updateRecommendedPositionPanel(data.recommended_position);
+                    updateAdaptiveStrategyStatus(data);
                     updateAlerts(data.alerts);
 
                     // Mode + Status pills
@@ -1727,6 +1752,28 @@
         // This only reads LOCAL cached state, no Fyers API calls
         function updateDashboard() {
             pollLocalStateOnly();
+        }
+
+        function updateAdaptiveStrategyStatus(data) {
+            const status = document.getElementById('adaptiveStrategyStatus');
+            const basket = document.getElementById('activeBasketSummary');
+            if (!status) return;
+            const rec = data.recommended_position || {};
+            const label = rec.strategy_label || 'WAIT / NO TRADE';
+            const reason = rec.rationale || rec.primary_action_detail || 'Refresh market data to evaluate the completed-candle signal.';
+            status.textContent = `${label}: ${reason}`;
+            status.style.color = rec.trade_approved ? '#10b981' : '#fbbf24';
+            const intent = data.current_order_intent;
+            const exec = data.order_execution_state;
+            if (basket) {
+                if (intent && ['DRAFT','VALIDATED'].includes(intent.status)) {
+                    basket.textContent = `Active basket: ${intent.strategy_name || 'Adaptive strategy'} · ${intent.direction || 'WAIT'} · ${intent.status}. Open Master Order Console to review.`;
+                } else if (exec && exec.basket_id && !['COMPLETED','CANCELLED'].includes(exec.status)) {
+                    basket.textContent = `Active basket: ${exec.basket_id} · ${exec.status || 'PENDING'}. Open Master Order Console to review.`;
+                } else {
+                    basket.textContent = 'Active basket: none. A basket appears after a confirmed signal and validation.';
+                }
+            }
         }
 
         // --- ENGINE 1: MARKET (FAST) ---
