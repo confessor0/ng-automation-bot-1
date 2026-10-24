@@ -1419,6 +1419,15 @@
                     <p style="margin-top: 8px; opacity: 0.6;">Awaiting a strategy signal or approved order intent...</p>
                 </div>
             </div>
+
+            <div class="card" style="margin-top:24px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                    <div class="card-title" style="margin:0;">🧾 Strategy Event Journal</div>
+                    <button class="btn btn-secondary" style="padding:5px 10px;font-size:11px;" onclick="pollStrategyEvents()">REFRESH EVENTS</button>
+                </div>
+                <div style="font-size:11px;color:#94a3b8;margin-bottom:10px;">Trend analyses, MA9 confirmations, trend changes, and saved simulations are recorded here.</div>
+                <div style="overflow:auto;"><table style="font-size:11px;"><thead><tr><th>TIME</th><th>EVENT</th><th>TREND</th><th>SIGNAL</th><th>FUTURES</th><th>PRICE</th></tr></thead><tbody id="strategyEventBody"><tr><td colspan="6" style="text-align:center;color:#64748b;padding:20px;">No events recorded yet.</td></tr></tbody></table></div>
+            </div>
         </div>
 
         <!-- User & Risk Profile Tab -->
@@ -1507,12 +1516,37 @@
 
 
             <div class="card">
-                <div class="card-title">✉️ Mailjet Trend Notifications</div>
+                <div class="card-title">✉️ Email Notifications</div>
                 <div style="display:flex;flex-direction:column;gap:8px;">
                     <label><input type="checkbox" id="admMailjetEnabled"> Enable email notifications</label>
-                    <label><input type="checkbox" id="admMailjetTrends" checked> Notify on Bullish/Bearish trend changes</label>
-                    <input type="email" id="admMailjetRecipient" class="multiplier-input" style="width:100%" placeholder="Notification recipient">
-                    <input type="email" id="admMailjetFrom" class="multiplier-input" style="width:100%" placeholder="Verified Mailjet sender email">
+                    <label style="font-size:12px;color:#94a3b8">Provider
+                        <select id="admEmailProvider" class="multiplier-input" style="width:100%">
+                            <option value="brevo">Brevo</option><option value="mailjet">Mailjet</option>
+                        </select>
+                    </label>
+                    <div style="font-size:12px;color:#94a3b8">Trend change alerts</div>
+                    <label><input type="checkbox" id="admNotifyBullish" checked> Bullish</label>
+                    <label><input type="checkbox" id="admNotifyBearish" checked> Bearish</label>
+                    <label><input type="checkbox" id="admNotifyNeutral"> Neutral</label>
+                    <label style="font-size:12px;color:#94a3b8">Event delivery
+                        <select id="admEmailTiming" class="multiplier-input" style="width:100%" onchange="toggleEmailDelayFields()">
+                            <option value="immediate">Send immediately</option>
+                            <option value="custom_delay">Send after a custom delay</option>
+                        </select>
+                    </label>
+                    <div id="admEmailDelayFields" style="display:none;grid-template-columns:1fr 1fr;gap:8px">
+                        <label style="font-size:12px;color:#94a3b8">Hours
+                            <input type="number" id="admEmailDelayHours" class="multiplier-input" min="0" max="24" value="0" style="width:100%">
+                        </label>
+                        <label style="font-size:12px;color:#94a3b8">Minutes
+                            <input type="number" id="admEmailDelayMinutes" class="multiplier-input" min="0" max="59" value="5" style="width:100%">
+                        </label>
+                    </div>
+                    <div style="font-size:11px;color:#94a3b8">A delayed trend event is sent by the running app shortly after its delay expires. New trend changes replace a waiting event.</div>
+                    <input type="email" id="admMailjetRecipient" class="multiplier-input" style="width:100%" placeholder="Notification recipient email">
+                    <input type="email" id="admMailjetFrom" class="multiplier-input" style="width:100%" placeholder="Verified sender email">
+                    <input type="text" id="admEmailFromName" class="multiplier-input" style="width:100%" placeholder="Sender name">
+                    <input type="password" id="admBrevoKey" class="multiplier-input" style="width:100%" placeholder="Brevo API key" autocomplete="new-password">
                     <input type="password" id="admMailjetKey" class="multiplier-input" style="width:100%" placeholder="Mailjet API key" autocomplete="new-password">
                     <input type="password" id="admMailjetSecret" class="multiplier-input" style="width:100%" placeholder="Mailjet secret key" autocomplete="new-password">
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -2278,8 +2312,19 @@
                 .then(data => {
                     renderMasterConsole(data.baskets);
                     updateMasterSummary(data.baskets);
+                    pollStrategyEvents();
                 })
                 .catch(err => console.error("Console Poll Error:", err));
+        }
+
+        function pollStrategyEvents() {
+            fetch('/api/strategy/events?limit=50')
+                .then(r => r.json()).then(data => {
+                    const body = document.getElementById('strategyEventBody');
+                    if (!body) return;
+                    if (!data.events || !data.events.length) { body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#64748b;padding:20px;">No events recorded yet.</td></tr>'; return; }
+                    body.innerHTML = data.events.map(e => `<tr><td>${e.occurred_at ? new Date(e.occurred_at).toLocaleString() : '-'}</td><td><span class="badge badge-neutral">${e.event_type}</span></td><td>${e.trend || '-'}</td><td>${e.signal_status || '-'}</td><td>${e.futures_confirmation || '-'}</td><td>${e.market_price ?? '-'}</td></tr>`).join('');
+                }).catch(err => console.error('Event journal error:', err));
         }
 
         function updateMasterSummary(baskets) {
@@ -2380,25 +2425,88 @@
         }
 
         function renderBasketActions(b) {
+            const simulator = `<button class="btn btn-secondary" style="padding: 4px 12px; font-size: 11px;" onclick="openSimulator('${b.basket_id}')">📊 SIMULATE</button>`;
             if (b.status === 'DRAFT') {
                 return `
+                    ${simulator}
                     <button class="btn btn-primary" style="padding: 4px 12px; font-size: 11px;" onclick="handleConsoleAction('${b.basket_id}', 'APPROVE')">APPROVE</button>
                     <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 11px;" onclick="handleConsoleAction('${b.basket_id}', 'CANCEL')">CANCEL</button>
                 `;
             }
             if (b.status === 'VALIDATED' || b.status === 'PENDING') {
-                return `<button class="btn btn-bullish" style="padding: 6px 16px; font-size: 13px;" onclick="handleConsoleAction('${b.basket_id}', 'EXECUTE')">EXECUTE</button>`;
+                return `${simulator}<button class="btn btn-bullish" style="padding: 6px 16px; font-size: 13px;" onclick="handleConsoleAction('${b.basket_id}', 'EXECUTE')">EXECUTE</button>`;
             }
             if (b.status === 'COMPLETED' || b.status === 'EXECUTED') {
-                return `<button class="btn btn-minimal" style="padding: 4px 12px; font-size: 11px; opacity: 0.5;" disabled>LOCKED</button>`;
+                return `${simulator}<button class="btn btn-minimal" style="padding: 4px 12px; font-size: 11px; opacity: 0.5;" disabled>LOCKED</button>`;
             }
             if (['FAILED', 'ERROR', 'REJECTED'].includes(b.status)) {
                 return `
+                    ${simulator}
                     <button class="btn btn-secondary" style="padding: 4px 12px; font-size: 11px;" onclick="handleConsoleAction('${b.basket_id}', 'RETRY')">RETRY / RESET</button>
                     <button class="btn btn-danger" style="padding: 4px 12px; font-size: 11px;" onclick="handleConsoleAction('${b.basket_id}', 'CANCEL')">DISMISS</button>
                 `;
             }
-            return '';
+            return simulator;
+        }
+
+        function closeSimulator() {
+            const modal = document.getElementById('simulatorModal');
+            if (modal) modal.remove();
+        }
+
+        function openSimulator(basketId) {
+            fetch('/api/orders/depth/' + encodeURIComponent(basketId))
+                .then(r => r.json())
+                .then(basket => {
+                    if (!basket || !basket.orders) throw new Error(basket.message || 'Basket unavailable');
+                    const now = new Date();
+                    const later = new Date(now.getTime() + 24 * 3600 * 1000);
+                    const iso = d => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0,16);
+                    const legs = basket.orders.map((o, i) => `
+                        <tr>
+                            <td>${o.seq || i + 1}</td><td>${o.symbol || '-'}</td><td>${o.side || '-'}</td>
+                            <td><input class="sim-entry" data-key="${o.seq || i + 1}" type="number" min="0" step="0.01" placeholder="Entry price"></td>
+                            <td><input class="sim-exit" data-key="${o.seq || i + 1}" type="number" min="0" step="0.01" placeholder="Exit price"></td>
+                            <td><input class="sim-qty" data-key="${o.seq || i + 1}" type="number" min="1" step="1" value="${o.qty || 1}"></td>
+                        </tr>`).join('');
+                    document.body.insertAdjacentHTML('beforeend', `
+                        <div id="simulatorModal" style="position:fixed;inset:0;background:rgba(2,6,23,.86);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px;">
+                            <div class="card" style="width:min(1100px,96vw);max-height:92vh;overflow:auto;border:1px solid rgba(59,130,246,.5);">
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+                                    <div><div class="card-title">📊 Basket Simulator</div><div style="font-size:12px;color:#94a3b8;">${basketId} · Price based what-if. No Fyers order is placed.</div></div>
+                                    <button class="btn btn-secondary" onclick="closeSimulator()">CLOSE</button>
+                                </div>
+                                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px;">
+                                    <label style="font-size:11px;color:#94a3b8;">ENTRY DATE / TIME<input id="simEntryAt" class="input-minimal" type="datetime-local" value="${iso(now)}" style="width:100%;margin-top:4px;"></label>
+                                    <label style="font-size:11px;color:#94a3b8;">EXIT DATE / TIME<input id="simExitAt" class="input-minimal" type="datetime-local" value="${iso(later)}" style="width:100%;margin-top:4px;"></label>
+                                    <label style="font-size:11px;color:#94a3b8;">QTY MULTIPLIER<input id="simMultiplier" class="input-minimal" type="number" min="0.01" step="0.01" value="1" style="width:100%;margin-top:4px;"></label>
+                                    <label style="font-size:11px;color:#94a3b8;">LOT SIZE<input id="simLotSize" class="input-minimal" type="number" min="1" step="1" value="250" style="width:100%;margin-top:4px;"></label>
+                                </div>
+                                <table style="font-size:12px;"><thead><tr><th>SEQ</th><th>SYMBOL</th><th>SIDE</th><th>ENTRY PRICE</th><th>EXIT PRICE</th><th>QTY</th></tr></thead><tbody>${legs}</tbody></table>
+                                <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px;"><button class="btn btn-primary" onclick="runBasketSimulation('${basketId}')">▶ RUN & SAVE SIMULATION</button></div>
+                                <div id="simulatorResult" style="margin-top:14px;"></div>
+                            </div>
+                        </div>`);
+                }).catch(err => alert('Simulator error: ' + err.message));
+        }
+
+        function runBasketSimulation(basketId) {
+            const entries = {}, exits = {}, quantities = {};
+            document.querySelectorAll('.sim-entry').forEach(el => entries[el.dataset.key] = el.value);
+            document.querySelectorAll('.sim-exit').forEach(el => exits[el.dataset.key] = el.value);
+            document.querySelectorAll('.sim-qty').forEach(el => quantities[el.dataset.key] = el.value);
+            fetch('/api/simulations', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+                basket_id:basketId, entry_at:document.getElementById('simEntryAt').value,
+                exit_at:document.getElementById('simExitAt').value,
+                quantity_multiplier:document.getElementById('simMultiplier').value,
+                lot_size:document.getElementById('simLotSize').value,
+                entry_prices:entries, exit_prices:exits, quantities:quantities
+            })}).then(r=>r.json()).then(data => {
+                const out = document.getElementById('simulatorResult');
+                if (!data.simulation) { out.innerHTML = `<div style="color:#f87171">${data.message || 'Simulation failed'}${data.errors ? '<br>'+data.errors.join('<br>') : ''}</div>`; return; }
+                const s = data.simulation;
+                out.innerHTML = `<div style="padding:14px;border:1px solid ${s.total_pnl >= 0 ? '#10b981' : '#ef4444'}66;border-radius:8px;background:rgba(15,23,42,.7);"><b>Simulation saved: ${s.simulation_id}</b><br><span style="font-size:20px;color:${s.total_pnl >= 0 ? '#10b981' : '#f87171'}">Net P&amp;L: ₹${s.total_pnl.toFixed(2)}</span><br><span style="color:#94a3b8">${s.entry_day} ${s.entry_hour} → ${s.exit_day} ${s.exit_hour} · ${s.holding_hours} hours · Return ${s.return_on_entry_pct ?? '-'}%</span></div>`;
+            }).catch(err => alert('Simulation error: ' + err.message));
         }
 
         function handleConsoleAction(basket_id, action) {
@@ -2944,28 +3052,51 @@
         }
         async function loadMailjetSettings() {
             try {
-                const response=await fetch('/api/admin/mailjet'); if(!response.ok)return;
+                const response=await fetch('/api/admin/email-notifications'); if(!response.ok)return;
                 const v=await response.json();
                 document.getElementById('admMailjetEnabled').checked=!!v.enabled;
-                document.getElementById('admMailjetTrends').checked=v.notify_trends!==false;
+                document.getElementById('admEmailProvider').value=v.provider||'mailjet';
+                document.getElementById('admNotifyBullish').checked=v.notify_bullish!==false;
+                document.getElementById('admNotifyBearish').checked=v.notify_bearish!==false;
+                document.getElementById('admNotifyNeutral').checked=!!v.notify_neutral;
+                document.getElementById('admEmailTiming').value=v.delivery_mode||'immediate';
+                document.getElementById('admEmailDelayHours').value=v.delay_hours||0;
+                document.getElementById('admEmailDelayMinutes').value=v.delay_minutes||0;
+                toggleEmailDelayFields();
                 document.getElementById('admMailjetRecipient').value=v.recipient||'';
                 document.getElementById('admMailjetFrom').value=v.from_email||'';
-                document.getElementById('admMailjetKey').placeholder=v.api_key_set?'Saved API key (blank keeps it)':'Mailjet API key';
-                document.getElementById('admMailjetSecret').placeholder=v.secret_key_set?'Saved secret (blank keeps it)':'Mailjet secret key';
-            } catch(e) { console.error('Could not load Mailjet settings:',e); }
+                document.getElementById('admEmailFromName').value=v.from_name||'NG Automation Bot';
+                document.getElementById('admBrevoKey').placeholder=v.brevo_api_key_set?'Saved Brevo key (blank keeps it)':'Brevo API key';
+                document.getElementById('admMailjetKey').placeholder=v.mailjet_api_key_set?'Saved Mailjet API key (blank keeps it)':'Mailjet API key';
+                document.getElementById('admMailjetSecret').placeholder=v.mailjet_secret_key_set?'Saved Mailjet secret (blank keeps it)':'Mailjet secret key';
+            } catch(e) { console.error('Could not load email notification settings:',e); }
+        }
+        function toggleEmailDelayFields() {
+            const delayed=document.getElementById('admEmailTiming').value==='custom_delay';
+            document.getElementById('admEmailDelayFields').style.display=delayed?'grid':'none';
         }
         async function adminSaveMailjet() {
             try {
-                const response=await fetch('/api/admin/mailjet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-                    enabled:document.getElementById('admMailjetEnabled').checked,notify_trends:document.getElementById('admMailjetTrends').checked,
+                const response=await fetch('/api/admin/email-notifications',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+                    enabled:document.getElementById('admMailjetEnabled').checked,notify_trends:true,
+                    notify_bullish:document.getElementById('admNotifyBullish').checked,
+                    notify_bearish:document.getElementById('admNotifyBearish').checked,
+                    notify_neutral:document.getElementById('admNotifyNeutral').checked,
+                    delivery_mode:document.getElementById('admEmailTiming').value,
+                    delay_hours:document.getElementById('admEmailDelayHours').value,
+                    delay_minutes:document.getElementById('admEmailDelayMinutes').value,
+                    provider:document.getElementById('admEmailProvider').value,
                     recipient:document.getElementById('admMailjetRecipient').value,from_email:document.getElementById('admMailjetFrom').value,
-                    api_key:document.getElementById('admMailjetKey').value,secret_key:document.getElementById('admMailjetSecret').value})});
-                const result=await response.json(); if(!response.ok)throw new Error(result.message||'Could not save Mailjet settings');
-                document.getElementById('admMailjetKey').value=''; document.getElementById('admMailjetSecret').value=''; alert(result.message); loadMailjetSettings();
+                    from_name:document.getElementById('admEmailFromName').value,
+                    brevo_api_key:document.getElementById('admBrevoKey').value,
+                    mailjet_api_key:document.getElementById('admMailjetKey').value,
+                    mailjet_secret_key:document.getElementById('admMailjetSecret').value})});
+                const result=await response.json(); if(!response.ok)throw new Error(result.message||'Could not save email settings');
+                ['admBrevoKey','admMailjetKey','admMailjetSecret'].forEach(id=>document.getElementById(id).value=''); alert(result.message); loadMailjetSettings();
             } catch(e) { alert(e.message); }
         }
         async function adminTestMailjet() {
-            try { const r=await fetch('/api/admin/mailjet/test',{method:'POST'}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Mailjet test failed'); alert(d.message); }
+            try { const r=await fetch('/api/admin/email-notifications/test',{method:'POST'}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Email test failed'); alert(d.message); }
             catch(e) { alert(e.message); }
         }
 

@@ -47,6 +47,27 @@ def internal_error(e):
 
 state_mgr = StateManager.get_instance()
 
+
+def record_strategy_event(event_type, symbol, trend, details, expiry=None,
+                          atm_strike=None, market_price=None, payload=None):
+    """Write an auditable strategy observation without changing FYERS behavior."""
+    try:
+        from src.database import UnifiedOrderManager
+        UnifiedOrderManager.get_instance().record_strategy_event(
+            event_type=event_type,
+            symbol=symbol,
+            trend=trend,
+            signal_status=(details or {}).get("signal_status"),
+            futures_confirmation=(details or {}).get("futures_confirmation"),
+            expiry=expiry,
+            atm_strike=atm_strike,
+            market_price=market_price,
+            payload=payload or details or {},
+        )
+    except Exception as exc:
+        # Persistence must never interrupt a market-data refresh.
+        print(f"⚠️ Strategy event persistence failed: {exc}")
+
 # Authentication Config
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "password123"
@@ -274,6 +295,7 @@ def refresh_market_data():
                 strategy = StrategyEngine(broker, market_data)
 
                 # Analyze trend - this populates ng_trend_engine in state
+                prior_trend = state_mgr.get_state().get("trend", "NEUTRAL")
                 trend, _, details = strategy.analyze_trend(fut_symbol, expiry)
 
                 trend_data = {
@@ -284,19 +306,37 @@ def refresh_market_data():
                     "pe_ma9": details.get("pe_ma9", 0)
                 }
                 print(f"✅ Trend Engine Updated: {trend}")
-                # Email once when the confirmed trend changes, not on every dashboard refresh.
-                mail_cfg = state_mgr.get_state().get("mailjet_config", {})
-                previous = mail_cfg.get("last_notified_trend")
-                if (mail_cfg.get("enabled") and mail_cfg.get("notify_trends") and
-                        trend in ("BULLISH", "BEARISH") and trend != previous):
-                    from src.notification_service import send_mailjet_notification
-                    sent = send_mailjet_notification(
-                        f"NG trend changed to {trend}",
-                        f"Natural Gas trend: {trend}\\nCE: {trend_data['ce_price']} (MA9 {trend_data['ce_ma9']})\\nPE: {trend_data['pe_price']} (MA9 {trend_data['pe_ma9']})",
-                        mail_cfg.get("recipient"))
-                    if sent:
-                        mail_cfg["last_notified_trend"] = trend
-                        state_mgr.update("mailjet_config", mail_cfg)
+                # Schedule one email for each selected trend transition.
+                mail_cfg = state_mgr.get_state().get("email_notification_config", {})
+                previous = mail_cfg.get("last_observed_trend", "NEUTRAL")
+                trend_option = {"BULLISH": "notify_bullish", "BEARISH": "notify_bearish",
+                                "NEUTRAL": "notify_neutral"}.get(trend)
+                changed = trend in ("BULLISH", "BEARISH", "NEUTRAL") and trend != previous
+                if changed:
+                    mail_cfg["last_observed_trend"] = trend
+                    mail_cfg.pop("pending_event", None)
+                    if (mail_cfg.get("enabled") and mail_cfg.get("notify_trends", True) and
+                            trend_option and mail_cfg.get(trend_option, trend != "NEUTRAL")):
+                        import time
+                        from src.notification_service import send_email_notification
+                        subject = f"NG trend changed to {trend}"
+                        message = f"Natural Gas trend: {trend}\nCE: {trend_data['ce_price']} (MA9 {trend_data['ce_ma9']})\nPE: {trend_data['pe_price']} (MA9 {trend_data['pe_ma9']})"
+                        delay_seconds = (int(mail_cfg.get("delay_hours", 0)) * 3600 +
+                                         int(mail_cfg.get("delay_minutes", 0)) * 60) if mail_cfg.get("delivery_mode") == "custom_delay" else 0
+                        if delay_seconds:
+                            mail_cfg["pending_event"] = {"subject": subject, "message": message,
+                                                          "trend": trend, "due_at": time.time() + delay_seconds}
+                        else:
+                            if send_email_notification(subject, message, mail_cfg.get("recipient")):
+                                mail_cfg["last_notified_trend"] = trend
+                            else:
+                                mail_cfg["pending_event"] = {"subject": subject, "message": message,
+                                                              "trend": trend, "due_at": time.time() + 60}
+                    state_mgr.update("email_notification_config", mail_cfg)
+                    from src.notification_service import load_provider_settings, save_provider_settings
+                    provider_settings = load_provider_settings()
+                    provider_settings["notifications"] = mail_cfg
+                    save_provider_settings(provider_settings)
 
                 # [NEW] Helper for Scenario Analysis (now uses instrument config)
                 from src.instrument_config import get_instrument_config, get_hedge_distance, get_wing_distance, get_scenario_moves
@@ -739,6 +779,29 @@ def refresh_market_data():
                 rec_position["primary_action_detail"] = rec_position.get("rationale", "")
                 rec_position["hedge_action"] = "PROTECTIVE HEDGES" if rec_position.get("legs") else "WAIT"
                 rec_position["hedge_detail"] = rec_position.get("market_context", {}).get("hedge_rule", "")
+
+                event_payload = {
+                    "previous_trend": prior_trend,
+                    "trend_changed": prior_trend != trend,
+                    "recommendation": rec_position,
+                    "details": details,
+                }
+                record_strategy_event(
+                    "TREND_ANALYSIS", symbol, trend, details, expiry, atm_strike,
+                    ltp, event_payload
+                )
+                if details.get("futures_confirmation"):
+                    record_strategy_event(
+                        "FUTURES_CONFIRMATION", symbol, trend, details, expiry,
+                        atm_strike, ltp, {"confirmation": details.get("futures_confirmation"),
+                                          "futures_close": details.get("futures_close"),
+                                          "futures_ma9": details.get("futures_ma9")}
+                    )
+                if prior_trend != trend:
+                    record_strategy_event(
+                        "TREND_CHANGE", symbol, trend, details, expiry, atm_strike,
+                        ltp, {"previous_trend": prior_trend, "new_trend": trend}
+                    )
 
                 # Store in state for persistence
                 state_mgr.update("recommended_position", rec_position)
@@ -1227,6 +1290,148 @@ def get_order_depth(basket_id):
         return jsonify({"status": "error", "message": "Basket not found"}), 404
     return jsonify(basket)
 
+
+@app.route('/api/strategy/events', methods=['GET'])
+@login_required
+def get_strategy_events():
+    """Return the durable trend/confirmation journal for audit and review."""
+    from src.database import UnifiedOrderManager
+    db = UnifiedOrderManager.get_instance()
+    events = db.list_strategy_events(
+        limit=request.args.get('limit', 100, type=int),
+        symbol=request.args.get('symbol'),
+        event_type=request.args.get('event_type'),
+        start_date=request.args.get('start_date'),
+        end_date=request.args.get('end_date'),
+    )
+    return jsonify({"events": events, "count": len(events)})
+
+
+def _parse_simulation_time(value, field_name):
+    from datetime import timezone
+    if not value:
+        raise ValueError(f"{field_name} is required")
+    raw = str(value).replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be ISO date/time") from exc
+    return parsed, parsed.isoformat()
+
+
+@app.route('/api/simulations', methods=['GET'])
+@login_required
+def list_simulations():
+    from src.database import UnifiedOrderManager
+    rows = UnifiedOrderManager.get_instance().list_simulations(
+        limit=request.args.get('limit', 50, type=int),
+        basket_id=request.args.get('basket_id'),
+    )
+    return jsonify({"simulations": rows, "count": len(rows)})
+
+
+@app.route('/api/simulations', methods=['POST'])
+@login_required
+def run_simulation():
+    """Run and save a price/quantity/time what-if for a displayed basket.
+
+    Prices are supplied per leg because options and futures have different
+    premiums. The calculation is deliberately transparent: signed price
+    change × quantity × lot size, plus holding duration and calendar fields.
+    It does not place orders or call FYERS.
+    """
+    import uuid
+    from src.database import UnifiedOrderManager
+    from src.instrument_config import get_instrument_config
+
+    data = request.get_json(silent=True) or {}
+    db = UnifiedOrderManager.get_instance()
+    basket_id = data.get("basket_id")
+    basket = db.get_basket(basket_id) if basket_id else None
+    if basket_id and not basket:
+        return jsonify({"status": "error", "message": "Basket not found"}), 404
+
+    raw_legs = data.get("legs")
+    if raw_legs is None and basket:
+        raw_legs = basket.get("orders", [])
+    if not isinstance(raw_legs, list) or not raw_legs:
+        return jsonify({"status": "error", "message": "A basket with at least one leg is required"}), 400
+
+    try:
+        entry_dt, entry_at = _parse_simulation_time(data.get("entry_at"), "entry_at")
+        exit_dt, exit_at = _parse_simulation_time(data.get("exit_at"), "exit_at")
+        if exit_dt < entry_dt:
+            raise ValueError("exit_at must be after entry_at")
+        multiplier = float(data.get("quantity_multiplier", 1))
+        if multiplier <= 0:
+            raise ValueError("quantity_multiplier must be greater than zero")
+        symbol_base = str(data.get("symbol", "NATGASMINI")).upper()
+        lot_size = float(data.get("lot_size") or get_instrument_config(symbol_base).get("lot_size", 1))
+        if lot_size <= 0:
+            raise ValueError("lot_size must be greater than zero")
+    except (TypeError, ValueError) as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 400
+
+    entry_prices = data.get("entry_prices") or {}
+    exit_prices = data.get("exit_prices") or {}
+    quantity_overrides = data.get("quantities") or {}
+    simulated_legs, errors = [], []
+    total_pnl = total_entry_value = total_exit_value = 0.0
+
+    for index, leg in enumerate(raw_legs, 1):
+        key = str(leg.get("seq", index))
+        symbol = leg.get("symbol") or leg.get("trading_symbol") or f"LEG_{key}"
+        entry_raw = entry_prices.get(key, entry_prices.get(symbol, leg.get("fill_price") or leg.get("ltp")))
+        exit_raw = exit_prices.get(key, exit_prices.get(symbol))
+        try:
+            entry_price = float(entry_raw)
+            exit_price = float(exit_raw)
+            qty = float(quantity_overrides.get(key, quantity_overrides.get(symbol, leg.get("qty", 0)))) * multiplier
+            if entry_price < 0 or exit_price < 0 or qty <= 0:
+                raise ValueError("price must be non-negative and quantity positive")
+        except (TypeError, ValueError):
+            errors.append(f"Leg {key} ({symbol}) needs numeric entry and exit prices and quantity")
+            continue
+
+        side = str(leg.get("side") or leg.get("action") or "BUY").upper()
+        direction = 1 if side == "BUY" else -1
+        entry_value = entry_price * qty * lot_size
+        exit_value = exit_price * qty * lot_size
+        pnl = (exit_price - entry_price) * qty * lot_size * direction
+        total_entry_value += entry_value if side == "BUY" else -entry_value
+        total_exit_value += exit_value if side == "BUY" else -exit_value
+        total_pnl += pnl
+        simulated_legs.append({
+            "seq": leg.get("seq", index), "symbol": symbol, "side": side,
+            "qty": qty, "entry_price": entry_price, "exit_price": exit_price,
+            "entry_value": round(entry_value, 2), "exit_value": round(exit_value, 2),
+            "pnl": round(pnl, 2), "holding_hours": round((exit_dt - entry_dt).total_seconds() / 3600, 4),
+        })
+
+    if errors:
+        return jsonify({"status": "error", "message": "Missing simulator inputs", "errors": errors}), 400
+
+    result = {
+        "status": "COMPLETED", "basket_id": basket_id,
+        "entry_at": entry_at, "exit_at": exit_at,
+        "entry_day": entry_dt.strftime("%A"), "exit_day": exit_dt.strftime("%A"),
+        "entry_hour": entry_dt.strftime("%H:%M"), "exit_hour": exit_dt.strftime("%H:%M"),
+        "holding_hours": round((exit_dt - entry_dt).total_seconds() / 3600, 4),
+        "lot_size": lot_size, "quantity_multiplier": multiplier,
+        "legs": simulated_legs, "total_pnl": round(total_pnl, 2),
+        "net_entry_value": round(total_entry_value, 2),
+        "net_exit_value": round(total_exit_value, 2),
+        "return_on_entry_pct": round((total_pnl / abs(total_entry_value) * 100), 4) if total_entry_value else None,
+    }
+    simulation_id = "SIM_" + uuid.uuid4().hex[:12].upper()
+    db.save_simulation(simulation_id, basket_id, entry_at, exit_at, multiplier, data, result)
+    result["simulation_id"] = simulation_id
+    record_strategy_event("SIMULATION_RUN", symbol_base, (basket or {}).get("direction"), {},
+                          (basket or {}).get("expiry"), (basket or {}).get("atm_strike"),
+                          None, {"simulation_id": simulation_id, "basket_id": basket_id,
+                                 "total_pnl": result["total_pnl"]})
+    return jsonify({"status": "success", "simulation": result})
+
 @app.route('/api/orders/action', methods=['POST'])
 @login_required
 @role_required("TRADER")
@@ -1537,54 +1742,85 @@ def fyers_callback():
         </div>
         """, 400
 
+@app.route('/api/admin/email-notifications', methods=['GET', 'POST'])
 @app.route('/api/admin/mailjet', methods=['GET', 'POST'])
 @login_required
 @role_required("ADMIN")
-def admin_mailjet():
-    import src.config as config
-    import json
-    import os
-    cfg = state_mgr.get_state().get("mailjet_config", {})
+def admin_email_notifications():
+    from src.notification_service import load_provider_settings, save_provider_settings, provider_status
+    provider_settings = load_provider_settings()
+    cfg = state_mgr.get_state().get("email_notification_config") or provider_settings.get("notifications", {})
     if request.method == 'GET':
         return jsonify({"enabled": cfg.get("enabled", False),
                         "notify_trends": cfg.get("notify_trends", True),
+                        "notify_bullish": cfg.get("notify_bullish", True),
+                        "notify_bearish": cfg.get("notify_bearish", True),
+                        "notify_neutral": cfg.get("notify_neutral", False),
+                        "delivery_mode": cfg.get("delivery_mode", "immediate"),
+                        "delay_hours": cfg.get("delay_hours", 0),
+                        "delay_minutes": cfg.get("delay_minutes", 0),
                         "recipient": cfg.get("recipient", ""),
-                        "from_email": config.MAILJET_FROM_EMAIL or "",
-                        "configured": bool(config.MAILJET_API_KEY and config.MAILJET_SECRET_KEY and config.MAILJET_FROM_EMAIL),
-                        "api_key_set": bool(config.MAILJET_API_KEY),
-                        "secret_key_set": bool(config.MAILJET_SECRET_KEY)})
+                        "provider": provider_settings.get("provider", "mailjet"),
+                        "from_email": provider_settings.get("from_email", ""),
+                        "from_name": provider_settings.get("from_name", "NG Automation Bot"),
+                        **provider_status(provider_settings)})
     data = request.get_json(silent=True) or {}
     recipient = str(data.get("recipient", "")).strip()
-    if recipient and ("@" not in recipient or len(recipient) > 254):
+    from_email = str(data.get("from_email", provider_settings.get("from_email", ""))).strip()
+    if any(email and ("@" not in email or len(email) > 254) for email in (recipient, from_email)):
         return jsonify({"status": "error", "message": "Enter a valid notification email."}), 400
-    cfg.update({"enabled": bool(data.get("enabled")),
-                "notify_trends": bool(data.get("notify_trends")),
-                "recipient": recipient})
-    state_mgr.update("mailjet_config", cfg)
-    saved = {"api_key": config.MAILJET_API_KEY, "secret_key": config.MAILJET_SECRET_KEY,
-             "from_email": config.MAILJET_FROM_EMAIL}
-    for field, env_name in (("api_key", "MAILJET_API_KEY"), ("secret_key", "MAILJET_SECRET_KEY"), ("from_email", "MAILJET_FROM_EMAIL")):
+    provider = str(data.get("provider", provider_settings.get("provider", "mailjet"))).lower()
+    if provider not in ("brevo", "mailjet"):
+        return jsonify({"status": "error", "message": "Choose Brevo or Mailjet."}), 400
+    try:
+        delay_hours = int(data.get("delay_hours", 0))
+        delay_minutes = int(data.get("delay_minutes", 0))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Delay must use whole hours and minutes."}), 400
+    if not (0 <= delay_hours <= 24 and 0 <= delay_minutes <= 59):
+        return jsonify({"status": "error", "message": "Hours must be 0 to 24 and minutes 0 to 59."}), 400
+    delivery_mode = str(data.get("delivery_mode", "immediate"))
+    if delivery_mode not in ("immediate", "custom_delay"):
+        return jsonify({"status": "error", "message": "Choose immediate or custom delay delivery."}), 400
+    if delivery_mode == "custom_delay" and delay_hours == 0 and delay_minutes == 0:
+        return jsonify({"status": "error", "message": "Custom delay must be at least one minute."}), 400
+    provider_settings.update({"provider": provider, "from_email": from_email,
+                              "from_name": str(data.get("from_name", provider_settings.get("from_name", "NG Automation Bot"))).strip() or "NG Automation Bot"})
+    secret_fields = ("brevo_api_key", "mailjet_api_key", "mailjet_secret_key")
+    for field in secret_fields:
         value = str(data.get(field, "")).strip()
         if value:
-            setattr(config, env_name, value)
-            saved[{"MAILJET_API_KEY":"api_key", "MAILJET_SECRET_KEY":"secret_key", "MAILJET_FROM_EMAIL":"from_email"}[env_name]] = value
+            provider_settings[field] = value
+    cfg.update({"enabled": bool(data.get("enabled")),
+                "notify_trends": bool(data.get("notify_trends", True)),
+                "notify_bullish": bool(data.get("notify_bullish", True)),
+                "notify_bearish": bool(data.get("notify_bearish", True)),
+                "notify_neutral": bool(data.get("notify_neutral")),
+                "delivery_mode": delivery_mode,
+                "delay_hours": delay_hours,
+                "delay_minutes": delay_minutes,
+                "recipient": recipient})
+    provider_settings["notifications"] = cfg
     try:
-        with open(os.path.join(os.getcwd(), "mailjet_config.json"), "w", encoding="utf-8") as settings_file:
-            json.dump(saved, settings_file)
+        save_provider_settings(provider_settings)
     except OSError:
-        return jsonify({"status": "error", "message": "Could not save Mailjet credentials on this server."}), 500
-    state_mgr.add_log("Mailjet notification settings updated", category="ADMIN", user=session.get('username'))
-    return jsonify({"status": "success", "message": "Mailjet notification settings saved."})
+        return jsonify({"status": "error", "message": "Could not save email provider settings on this server."}), 500
+    state_mgr.update("email_notification_config", cfg)
+    state_mgr.add_log(f"{provider.title()} email notification settings updated", category="ADMIN", user=session.get('username'))
+    return jsonify({"status": "success", "message": "Email notification settings saved."})
 
+@app.route('/api/admin/email-notifications/test', methods=['POST'])
 @app.route('/api/admin/mailjet/test', methods=['POST'])
 @login_required
 @role_required("ADMIN")
-def admin_mailjet_test():
-    cfg = state_mgr.get_state().get("mailjet_config", {})
-    from src.notification_service import send_mailjet_notification
-    if send_mailjet_notification("NG Bot Mailjet test", "Mailjet notifications are configured.", cfg.get("recipient")):
-        return jsonify({"status": "success", "message": "Test email sent."})
-    return jsonify({"status": "error", "message": "Test email failed. Check Mailjet credentials, sender verification, and recipient."}), 400
+def admin_email_notifications_test():
+    from src.notification_service import send_email_notification, load_provider_settings
+    provider_settings = load_provider_settings()
+    cfg = state_mgr.get_state().get("email_notification_config") or provider_settings.get("notifications", {})
+    provider = load_provider_settings().get("provider", "mailjet")
+    if send_email_notification(f"NG Bot {provider.title()} test", "Email notifications are configured.", cfg.get("recipient")):
+        return jsonify({"status": "success", "message": "Test email accepted by the provider."})
+    return jsonify({"status": "error", "message": "Test email failed. Check provider credentials, verified sender, and recipient."}), 400
 
 # FYERS credential login routes retained from the existing application behavior.
 @app.route('/api/admin/save_credentials', methods=['POST'])

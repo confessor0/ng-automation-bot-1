@@ -60,6 +60,39 @@ class UnifiedOrderManager:
                     UNIQUE(basket_id, seq)
                 )
             """)
+
+            # Append-only strategy/event journal. This records every refresh
+            # analysis, trend transition, and futures confirmation so the
+            # dashboard can explain how a basket was produced.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS strategy_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    event_type TEXT NOT NULL,
+                    symbol TEXT,
+                    trend TEXT,
+                    signal_status TEXT,
+                    futures_confirmation TEXT,
+                    expiry TEXT,
+                    atm_strike REAL,
+                    market_price REAL,
+                    occurred_at TEXT NOT NULL,
+                    payload TEXT
+                )
+            """)
+
+            # Saved, reproducible what-if calculations for any basket.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS simulations (
+                    simulation_id TEXT PRIMARY KEY,
+                    basket_id TEXT,
+                    created_at TEXT NOT NULL,
+                    entry_at TEXT,
+                    exit_at TEXT,
+                    quantity_multiplier REAL NOT NULL,
+                    input_data TEXT NOT NULL,
+                    result_data TEXT NOT NULL
+                )
+            """)
             conn.commit()
 
     def upsert_basket(self, basket_data: dict):
@@ -201,3 +234,71 @@ class UnifiedOrderManager:
             
             cursor.execute(f"UPDATE orders SET {', '.join(fields)} WHERE basket_id = ? AND seq = ?", params)
             conn.commit()
+
+    def record_strategy_event(self, event_type, symbol=None, trend=None,
+                              signal_status=None, futures_confirmation=None,
+                              expiry=None, atm_strike=None, market_price=None,
+                              payload=None, occurred_at=None):
+        """Persist one strategy observation without replacing earlier events."""
+        occurred_at = occurred_at or datetime.now().isoformat()
+        with sqlite3.connect(self.DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO strategy_events
+                (event_type, symbol, trend, signal_status, futures_confirmation,
+                 expiry, atm_strike, market_price, occurred_at, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (event_type, symbol, trend, signal_status,
+                  futures_confirmation, expiry, atm_strike, market_price,
+                  occurred_at, json.dumps(payload or {}, default=str)))
+            conn.commit()
+            return cursor.lastrowid
+
+    def list_strategy_events(self, limit=100, symbol=None, event_type=None,
+                             start_date=None, end_date=None):
+        query = "SELECT * FROM strategy_events"
+        params, where = [], []
+        if symbol:
+            where.append("symbol = ?"); params.append(symbol)
+        if event_type:
+            where.append("event_type = ?"); params.append(event_type)
+        if start_date:
+            where.append("occurred_at >= ?"); params.append(start_date)
+        if end_date:
+            where.append("occurred_at <= ?"); params.append(end_date)
+        if where:
+            query += " WHERE " + " AND ".join(where)
+        query += " ORDER BY occurred_at DESC, id DESC LIMIT ?"
+        params.append(max(1, min(int(limit or 100), 1000)))
+        with sqlite3.connect(self.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            return [dict(row) for row in conn.execute(query, params).fetchall()]
+
+    def save_simulation(self, simulation_id, basket_id, entry_at, exit_at,
+                        quantity_multiplier, input_data, result_data):
+        created_at = datetime.now().isoformat()
+        with sqlite3.connect(self.DB_PATH) as conn:
+            conn.execute("""
+                INSERT INTO simulations
+                (simulation_id, basket_id, created_at, entry_at, exit_at,
+                 quantity_multiplier, input_data, result_data)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (simulation_id, basket_id, created_at, entry_at, exit_at,
+                  quantity_multiplier, json.dumps(input_data, default=str),
+                  json.dumps(result_data, default=str)))
+            conn.commit()
+
+    def list_simulations(self, limit=50, basket_id=None):
+        query = "SELECT * FROM simulations"
+        params = []
+        if basket_id:
+            query += " WHERE basket_id = ?"; params.append(basket_id)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, min(int(limit or 50), 500)))
+        with sqlite3.connect(self.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = [dict(row) for row in conn.execute(query, params).fetchall()]
+        for row in rows:
+            row["input_data"] = json.loads(row["input_data"] or "{}")
+            row["result_data"] = json.loads(row["result_data"] or "{}")
+        return rows
