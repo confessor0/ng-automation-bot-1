@@ -98,9 +98,6 @@ class OrderIntentEngine:
         admin_config = self.state_mgr.get_state().get("admin_config", {})
         if basket_type.upper() == "ENTRY" and admin_config.get("news_risk_enabled", False):
             return {"success": False, "message": "New entries are blocked by the active News / Event Risk control."}
-        if basket_type.upper() == "ENTRY" and admin_config.get("active_strategy") == "STRATEGY_2":
-            return {"success": False, "message": "Strategy 2 signal is active, but its position quantities and order legs are not configured yet."}
-
         # Check if there's already a pending intent
         if self._current_intent and self._current_intent.get("status") in ["DRAFT", "VALIDATED"]:
             return {
@@ -152,6 +149,43 @@ class OrderIntentEngine:
         """Creates a preview of what orders would be in the basket"""
         from src.utils import SYMBOL_SPECS
         specs = SYMBOL_SPECS.get(executor.symbol_base, SYMBOL_SPECS["NATGASMINI"])
+
+        # Finalized adaptive strategy baskets. These are drafts only and keep
+        # the existing validation/approval gate before any broker order.
+        if basket_type == "ENTRY" and strategy_name.startswith("Strategy 1"):
+            interval = specs.get("interval", 5)
+            if direction == "BULLISH":
+                legs = [("BUY", atm_strike, "PE", 12), ("BUY", None, None, 6),
+                        ("BUY", atm_strike - 2 * interval, "CE", 6),
+                        ("SELL", atm_strike, "CE", 4), ("SELL", atm_strike, "PE", 4)]
+            else:
+                legs = [("BUY", atm_strike, "CE", 12), ("SELL", None, None, 6),
+                        ("BUY", atm_strike + 4 * interval, "PE", 6),
+                        ("SELL", atm_strike, "CE", 4), ("SELL", atm_strike, "PE", 4)]
+            orders = []
+            for seq, (side, strike, opt_type, qty) in enumerate(legs, 1):
+                orders.append({"seq": seq, "type": "Adaptive Strategy 1", "leg_type": opt_type or "FUTURES",
+                               "symbol": executor._construct_symbol("FUT" if strike is None else "OPT", expiry, strike, opt_type),
+                               "strike": strike, "opt_type": opt_type, "side": side, "qty": qty})
+            return orders
+
+        if basket_type == "ENTRY" and strategy_name.startswith("Strategy 2"):
+            interval = specs.get("interval", 5)
+            fut = executor._construct_symbol("FUT", expiry)
+            ce = executor._construct_symbol("OPT", expiry, atm_strike, "CE")
+            pe = executor._construct_symbol("OPT", expiry, atm_strike, "PE")
+            quotes = self.broker.get_quotes([ce, pe]) if self.broker else {}
+            combined = float(quotes.get(ce, 0) or 0) + float(quotes.get(pe, 0) or 0)
+            if combined <= 0:
+                return []
+            put_strike = int(round((atm_strike - combined) / interval) * interval)
+            call_strike = int(round((atm_strike + combined) / interval) * interval)
+            return [
+                {"seq": 1, "type": "Adaptive Strategy 2", "leg_type": "ATM_PUT_SELL", "symbol": pe, "strike": atm_strike, "opt_type": "PE", "side": "SELL", "qty": 10},
+                {"seq": 2, "type": "Adaptive Strategy 2", "leg_type": "ATM_CALL_SELL", "symbol": ce, "strike": atm_strike, "opt_type": "CE", "side": "SELL", "qty": 10},
+                {"seq": 3, "type": "Adaptive Strategy 2", "leg_type": "HEDGE_PUT_BUY", "symbol": executor._construct_symbol("OPT", expiry, put_strike, "PE"), "strike": put_strike, "opt_type": "PE", "side": "BUY", "qty": 10},
+                {"seq": 4, "type": "Adaptive Strategy 2", "leg_type": "HEDGE_CALL_BUY", "symbol": executor._construct_symbol("OPT", expiry, call_strike, "CE"), "strike": call_strike, "opt_type": "CE", "side": "BUY", "qty": 10},
+            ]
         
         orders = []
         fly_qty = 2

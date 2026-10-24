@@ -16,10 +16,11 @@ class StrategyEngine:
         self.ma_period = 9  # [NEW] Default 9 MA
         
     def analyze_trend(self, fut_symbol, expiry):
-        active_strategy = self.state_manager.get_state().get("admin_config", {}).get("active_strategy", "STRATEGY_1")
-        if active_strategy == "STRATEGY_2":
-            return self._analyze_strategy_2_completed_cross(fut_symbol, expiry)
-        return self._analyze_strategy_1(fut_symbol, expiry)
+        # Both finalized strategies use the same completed-candle MA9 signal.
+        # Strategy selection happens after the signal: trending structures are
+        # used for confirmed directional futures action; consolidation uses the
+        # protected straddle only when range conditions are confirmed.
+        return self._analyze_strategy_2_completed_cross(fut_symbol, expiry)
 
     def _analyze_strategy_1(self, fut_symbol, expiry):
         """
@@ -136,7 +137,7 @@ class StrategyEngine:
         return trend, atm_strike, details
 
     def _analyze_strategy_2_completed_cross(self, fut_symbol, expiry):
-        """Evaluate paired CE/PE MA9 crosses from the latest completed daily candles."""
+        """Evaluate paired option crosses and confirm them with futures action."""
         from src.config import TIMEZONE, is_market_open
 
         if not getattr(self.broker, "fyers", None):
@@ -163,7 +164,8 @@ class StrategyEngine:
 
         ce_hist = completed_daily(ce_symbol)
         pe_hist = completed_daily(pe_symbol)
-        if len(ce_hist) < self.ma_period + 1 or len(pe_hist) < self.ma_period + 1:
+        fut_hist = completed_daily(fut_symbol)
+        if len(ce_hist) < self.ma_period + 1 or len(pe_hist) < self.ma_period + 1 or len(fut_hist) < self.ma_period + 1:
             return "NEUTRAL", atm, {"signal_rule": "STRATEGY_2", "signal_status": "WAITING_FOR_10_COMPLETED_DAILY_CANDLES"}
 
         def cross_values(frame):
@@ -173,11 +175,19 @@ class StrategyEngine:
 
         ce_prev, ce_prev_ma, ce_close, ce_ma = cross_values(ce_hist)
         pe_prev, pe_prev_ma, pe_close, pe_ma = cross_values(pe_hist)
+        fut_prev, fut_prev_ma, fut_close, fut_ma = cross_values(fut_hist)
         pe_crossed_below = pe_prev >= pe_prev_ma and pe_close < pe_ma
         pe_crossed_above = pe_prev <= pe_prev_ma and pe_close > pe_ma
         ce_crossed_below = ce_prev >= ce_prev_ma and ce_close < ce_ma
         ce_crossed_above = ce_prev <= ce_prev_ma and ce_close > ce_ma
         both_below = ce_close < ce_ma and pe_close < pe_ma
+
+        if fut_close > fut_ma:
+            futures_confirmation = "BULLISH"
+        elif fut_close < fut_ma:
+            futures_confirmation = "BEARISH"
+        else:
+            futures_confirmation = "CONSOLIDATION"
 
         if pe_crossed_below and ce_crossed_above:
             trend, status = "BULLISH", "PAIRED_BULLISH_CROSS"
@@ -188,6 +198,14 @@ class StrategyEngine:
         else:
             trend, status = "NEUTRAL", "NO_PAIRED_CROSS"
 
+        # A directional signal is actionable only when the futures candle agrees.
+        if trend in ("BULLISH", "BEARISH") and futures_confirmation != trend:
+            status = "CONFLICTING_FUTURES_CONFIRMATION"
+        elif trend == "NEUTRAL" and both_below and futures_confirmation in ("BULLISH", "BEARISH"):
+            # Options are below their averages while futures are directional:
+            # this is not a confirmed range; keep the result in WAIT.
+            status = "CONFLICTING_FUTURES_CONFIRMATION"
+
         details = {
             "signal_rule": "STRATEGY_2", "signal_status": status,
             "ce_symbol": ce_symbol, "ce_close": round(ce_close, 2), "ce_ma9": round(ce_ma, 2),
@@ -195,6 +213,9 @@ class StrategyEngine:
             "ce_crossed_below": ce_crossed_below, "ce_crossed_above": ce_crossed_above,
             "pe_crossed_below": pe_crossed_below, "pe_crossed_above": pe_crossed_above,
             "both_below_ma9": both_below,
+            "futures_close": round(fut_close, 2), "futures_ma9": round(fut_ma, 2),
+            "futures_confirmation": futures_confirmation,
+            "futures_prev_close": round(fut_prev, 2), "futures_prev_ma9": round(fut_prev_ma, 2),
             "completed_candle_epoch": int(ce_hist["epoch"].iloc[-1]) if "epoch" in ce_hist.columns else None
         }
         self.state_manager.update("trend", trend)

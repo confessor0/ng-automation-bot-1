@@ -220,7 +220,7 @@ class StateManager:
                 "max_daily_loss_pct": 1.5,     # [NEW] Strict Capital Protection Limit
                 "risk_lock_enabled": True,
                 "news_risk_enabled": False,
-                "active_strategy": "STRATEGY_1"
+                "active_strategy": "AUTO"
             },
             "system_health": {
                 "mode": "LIVE", # LIVE / PAPER / MAINTENANCE

@@ -700,6 +700,40 @@ def refresh_market_data():
                         }
                     }
 
+                # Replace the legacy benchmark hedge preview with the finalized
+                # MCX strategy basket. This is decision support only; execution
+                # still requires the existing review/approval flow.
+                from src.adaptive_strategy import build_recommendation
+                option_quotes = {}
+                option_symbols = [details.get("ce_symbol"), details.get("pe_symbol")]
+                try:
+                    option_quotes.update(market_data._get_batch_ltp([s for s in option_symbols if s]))
+                except Exception:
+                    pass
+                rec_position = build_recommendation(
+                    trend=trend,
+                    signal_status=details.get("signal_status", "NO_SIGNAL"),
+                    cmp=ltp,
+                    atm_strike=atm_strike,
+                    expiry=expiry,
+                    option_interval=inst_config.get("strike_interval", 5),
+                    quote=lambda sym: option_quotes.get(sym, 0.0),
+                    symbol_builder=construct_symbol,
+                    futures_confirmation=details.get("futures_confirmation", "UNKNOWN"),
+                    consolidation=bool(details.get("both_below_ma9")),
+                )
+                rec_position["composition"] = [
+                    {"role": f"{leg['action']} {leg['instrument']}", "instrument": leg["instrument"],
+                     "action": leg["action"], "strike": leg["strike"] or "MKT", "qty": leg["qty"],
+                     "trading_symbol": leg.get("symbol"), "ltp": leg.get("premium") or 0.0,
+                     "value": (leg.get("premium") or 0.0) * leg["qty"] * lot_size}
+                    for leg in rec_position.get("legs", [])
+                ]
+                rec_position["primary_action"] = rec_position.get("strategy_label", "WAIT / NO TRADE")
+                rec_position["primary_action_detail"] = rec_position.get("rationale", "")
+                rec_position["hedge_action"] = "PROTECTIVE HEDGES" if rec_position.get("legs") else "WAIT"
+                rec_position["hedge_detail"] = rec_position.get("market_context", {}).get("hedge_rule", "")
+
                 # Store in state for persistence
                 state_mgr.update("recommended_position", rec_position)
 

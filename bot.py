@@ -145,7 +145,7 @@ class TradingBot:
                     trigger_rule=f"Trend {trend} sustained for {sustained} candles",
                     atm_strike=atm_strike,
                     expiry=expiry,
-                    strategy_name="Benchmark Hedge"
+                    strategy_name=f"Strategy 1 — {trend.title()} Trending Markets"
                 )
 
                 if intent_result.get("success"):
@@ -155,6 +155,20 @@ class TradingBot:
             elif state_action.get("action") == "CANCEL_INTENT":
                 # Trend lost before execution - cancel pending intent
                 intent_engine.cancel_intent("Trend became neutral before execution")
+
+            # Consolidation is a valid Strategy 2 basket when both ATM legs
+            # closed below MA9 and futures price action confirms a range.
+            if (trend == "NEUTRAL" and details.get("both_below_ma9") and
+                    details.get("futures_confirmation") == "CONSOLIDATION" and
+                    not intent_engine.get_current_intent()):
+                intent_result = intent_engine.create_intent(
+                    direction="NEUTRAL", basket_type="ENTRY",
+                    trigger_rule="Both ATM options below MA9 with confirmed futures consolidation",
+                    atm_strike=atm_strike, expiry=expiry,
+                    strategy_name="Strategy 2 — Consolidation Markets"
+                )
+                if intent_result.get("success"):
+                    self.state_mgr.add_log(f"📋 [{symbol}] Strategy 2 consolidation basket ready for validation")
 
             # ==========================================
             # POSITIONS ANALYZER (For IN_POSITION state)

@@ -1452,10 +1452,11 @@
                     <label style="display:flex;justify-content:space-between;align-items:center;color:#fbbf24;">News / Event Risk (block new entries)
                         <input type="checkbox" id="chkNewsRisk" onchange="setNewsRiskToggle(this.checked)">
                     </label>
-                    <label for="activeSignalStrategy" style="font-size:12px;color:#cbd5e1;">Active signal strategy</label>
+                    <label for="activeSignalStrategy" style="font-size:12px;color:#cbd5e1;">Strategy selection</label>
                     <select id="activeSignalStrategy" class="multiplier-input" onchange="setActiveSignalStrategy(this.value)">
-                        <option value="STRATEGY_1">Strategy 1 · Existing MA9 bias</option>
-                        <option value="STRATEGY_2">Strategy 2 · Completed-candle MA9 cross (signals only)</option>
+                        <option value="AUTO">Adaptive · Select from confirmed trend/range</option>
+                        <option value="STRATEGY_1">Strategy 1 · Trending markets</option>
+                        <option value="STRATEGY_2">Strategy 2 · Consolidation markets</option>
                     </select>
                 </div>
             </div>
