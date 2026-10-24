@@ -10,7 +10,11 @@ class UnifiedOrderManager:
     Baskets and Orders are now first-class citizens with permanent records.
     """
     
-    DB_PATH = "/tmp/trading_data.db" if os.environ.get("VERCEL") else "trading_data.db"
+    _persistent_dir = os.environ.get("TRADING_DB_DIR") or (
+        "/data" if os.path.isdir("/data") else None
+    )
+    DB_PATH = (os.path.join(_persistent_dir, "trading_data.db") if _persistent_dir
+               else ("/tmp/trading_data.db" if os.environ.get("VERCEL") else "trading_data.db"))
     
     _instance = None
     
@@ -80,6 +84,14 @@ class UnifiedOrderManager:
                     payload TEXT
                 )
             """)
+            # Add audit columns to databases created by earlier releases.
+            existing = {row[1] for row in cursor.execute("PRAGMA table_info(strategy_events)").fetchall()}
+            for column, definition in {
+                "scan_id": "TEXT", "sequence_no": "INTEGER", "candle_at": "TEXT",
+                "previous_trend": "TEXT", "raw_trend": "TEXT"
+            }.items():
+                if column not in existing:
+                    cursor.execute(f"ALTER TABLE strategy_events ADD COLUMN {column} {definition}")
 
             # Saved, reproducible what-if calculations for any basket.
             cursor.execute("""
@@ -252,7 +264,9 @@ class UnifiedOrderManager:
     def record_strategy_event(self, event_type, symbol=None, trend=None,
                               signal_status=None, futures_confirmation=None,
                               expiry=None, atm_strike=None, market_price=None,
-                              payload=None, occurred_at=None):
+                              payload=None, occurred_at=None, scan_id=None,
+                              sequence_no=None, candle_at=None, previous_trend=None,
+                              raw_trend=None):
         """Persist one strategy observation without replacing earlier events."""
         occurred_at = occurred_at or datetime.now(TIMEZONE).isoformat()
         with sqlite3.connect(self.DB_PATH) as conn:
@@ -260,11 +274,13 @@ class UnifiedOrderManager:
             cursor.execute("""
                 INSERT INTO strategy_events
                 (event_type, symbol, trend, signal_status, futures_confirmation,
-                 expiry, atm_strike, market_price, occurred_at, payload)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 expiry, atm_strike, market_price, occurred_at, payload,
+                 scan_id, sequence_no, candle_at, previous_trend, raw_trend)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (event_type, symbol, trend, signal_status,
                   futures_confirmation, expiry, atm_strike, market_price,
-                  occurred_at, json.dumps(payload or {}, default=str)))
+                  occurred_at, json.dumps(payload or {}, default=str), scan_id,
+                  sequence_no, candle_at, previous_trend, raw_trend))
             conn.commit()
             return cursor.lastrowid
 
@@ -286,7 +302,13 @@ class UnifiedOrderManager:
         params.append(max(1, min(int(limit or 100), 1000)))
         with sqlite3.connect(self.DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
-            return [dict(row) for row in conn.execute(query, params).fetchall()]
+            rows = [dict(row) for row in conn.execute(query, params).fetchall()]
+        for row in rows:
+            try:
+                row["payload"] = json.loads(row.get("payload") or "{}")
+            except (TypeError, ValueError):
+                row["payload"] = {}
+        return rows
 
     def save_simulation(self, simulation_id, basket_id, entry_at, exit_at,
                         quantity_multiplier, input_data, result_data):

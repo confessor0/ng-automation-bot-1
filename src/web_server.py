@@ -1448,17 +1448,23 @@ def scan_strategy_history():
             payload = {"scan_id": scan_id, "date": day, "previous_trend": previous_trend,
                        "trend_changed": changed, "expiry": expiry, "atm_strike": atm,
                        "symbols": {"fut": fut_symbol, "ce": ce_symbol, "pe": pe_symbol}}
+            candle_at = datetime.fromtimestamp(dated["fut"][day]["epoch"], TIMEZONE).isoformat()
+            sequence_no = len(records) + 1
             db.record_strategy_event("HISTORICAL_SIGNAL", symbol=symbol, trend=trend,
                                      signal_status=detail["signal_status"],
                                      futures_confirmation=futures_confirmation,
                                      expiry=expiry, atm_strike=atm, market_price=fut_now,
-                                     payload={**payload, "details": detail})
+                                     payload={**payload, "details": detail}, scan_id=scan_id,
+                                     sequence_no=sequence_no, candle_at=candle_at,
+                                     previous_trend=previous_trend, raw_trend=raw_trend)
             if changed:
                 db.record_strategy_event("HISTORICAL_TREND_CHANGE", symbol=symbol, trend=trend,
                                          signal_status=detail["signal_status"],
                                          futures_confirmation=futures_confirmation,
                                          expiry=expiry, atm_strike=atm, market_price=fut_now,
-                                         payload=payload)
+                                         payload=payload, scan_id=scan_id,
+                                         sequence_no=sequence_no, candle_at=candle_at,
+                                         previous_trend=previous_trend, raw_trend=raw_trend)
             records.append({"date": day, "trend": trend, "raw_trend": raw_trend, "signal_status": signal_status,
                             "futures_confirmation": futures_confirmation,
                             "ce": {"price": round(ce_now, 4), "ma9": round(ce_ma, 4), "crossed_below": ce_crossed_below, "crossed_above": ce_crossed_above},
