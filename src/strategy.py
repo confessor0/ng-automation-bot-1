@@ -206,6 +206,14 @@ class StrategyEngine:
             # this is not a confirmed range; keep the result in WAIT.
             status = "CONFLICTING_FUTURES_CONFIRMATION"
 
+        # A confirmed trend remains active until an opposite confirmed signal
+        # appears. This separates a continuing trend from a new MA9 cross.
+        prior_confirmed = self.state_manager.get_state().get("ng_strategy_state", {}).get("trend_bias", "NEUTRAL")
+        if trend == "NEUTRAL" and prior_confirmed in ("BULLISH", "BEARISH"):
+            if futures_confirmation in ("CONSOLIDATION", prior_confirmed):
+                trend = prior_confirmed
+                status = f"TREND_CONTINUES_{prior_confirmed}"
+
         details = {
             "signal_rule": "STRATEGY_2", "signal_status": status,
             "ce_symbol": ce_symbol, "ce_close": round(ce_close, 2), "ce_ma9": round(ce_ma, 2),
@@ -216,6 +224,8 @@ class StrategyEngine:
             "futures_close": round(fut_close, 2), "futures_ma9": round(fut_ma, 2),
             "futures_confirmation": futures_confirmation,
             "futures_prev_close": round(fut_prev, 2), "futures_prev_ma9": round(fut_prev_ma, 2),
+            "trend_persistence": status.startswith("TREND_CONTINUES_"),
+            "confirmed_trend": trend,
             "completed_candle_epoch": int(ce_hist["epoch"].iloc[-1]) if "epoch" in ce_hist.columns else None
         }
         self.state_manager.update("trend", trend)

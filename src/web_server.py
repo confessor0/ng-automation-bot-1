@@ -1412,23 +1412,33 @@ def scan_strategy_history():
             ce_crossed_above = ce_prev <= ce_prev_ma and ce_now > ce_ma
             both_below = ce_below and pe_below
             futures_confirmation = "BULLISH" if fut_now > fut_ma else ("BEARISH" if fut_now < fut_ma else "CONSOLIDATION")
+            raw_trend = "NEUTRAL"
             if pe_crossed_below and ce_crossed_above:
-                trend, signal_status = "BULLISH", "PAIRED_BULLISH_CROSS"
+                raw_trend, signal_status = "BULLISH", "PAIRED_BULLISH_CROSS"
             elif ce_crossed_below and pe_crossed_above:
-                trend, signal_status = "BEARISH", "PAIRED_BEARISH_CROSS"
+                raw_trend, signal_status = "BEARISH", "PAIRED_BEARISH_CROSS"
             elif both_below:
-                trend, signal_status = "NEUTRAL", "BOTH_OPTIONS_BELOW_MA9"
+                raw_trend, signal_status = "NEUTRAL", "BOTH_OPTIONS_BELOW_MA9"
             else:
-                trend, signal_status = "NEUTRAL", "NO_PAIRED_CROSS"
+                raw_trend, signal_status = "NEUTRAL", "NO_PAIRED_CROSS"
+            trend = raw_trend
             if trend in ("BULLISH", "BEARISH") and futures_confirmation != trend:
                 signal_status = "CONFLICTING_FUTURES_CONFIRMATION"
             elif trend == "NEUTRAL" and both_below and futures_confirmation in ("BULLISH", "BEARISH"):
                 signal_status = "CONFLICTING_FUTURES_CONFIRMATION"
 
+            # Carry the last confirmed direction across ordinary days. A
+            # trend changes only on an opposite confirmed paired cross.
+            if raw_trend == "NEUTRAL" and previous_trend in ("BULLISH", "BEARISH") and \
+                    futures_confirmation in ("CONSOLIDATION", previous_trend):
+                trend = previous_trend
+                signal_status = f"TREND_CONTINUES_{previous_trend}"
+
             changed = previous_trend != trend
             if changed: counts["CHANGED"] += 1
             counts[trend] += 1
             detail = {"signal_rule": "STRATEGY_2", "signal_status": signal_status,
+                      "raw_trend": raw_trend, "trend_persistence": raw_trend == "NEUTRAL" and trend != "NEUTRAL",
                       "ce_close": round(ce_now, 4), "ce_ma9": round(ce_ma, 4),
                       "pe_close": round(pe_now, 4), "pe_ma9": round(pe_ma, 4),
                       "futures_close": round(fut_now, 4), "futures_ma9": round(fut_ma, 4),
@@ -1441,7 +1451,7 @@ def scan_strategy_history():
                                      {**payload, "details": detail})
             if changed:
                 db.record_strategy_event("HISTORICAL_TREND_CHANGE", symbol, trend, detail, expiry, atm, fut_now, payload)
-            records.append({"date": day, "trend": trend, "signal_status": signal_status,
+            records.append({"date": day, "trend": trend, "raw_trend": raw_trend, "signal_status": signal_status,
                             "futures_confirmation": futures_confirmation,
                             "ce": {"price": round(ce_now, 4), "ma9": round(ce_ma, 4), "crossed_below": ce_crossed_below, "crossed_above": ce_crossed_above},
                             "pe": {"price": round(pe_now, 4), "ma9": round(pe_ma, 4), "crossed_below": pe_crossed_below, "crossed_above": pe_crossed_above},
