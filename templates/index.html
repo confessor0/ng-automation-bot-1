@@ -455,7 +455,7 @@
         }
         .trend-summary-grid {
             display: grid;
-            grid-template-columns: repeat(5, minmax(0, 1fr));
+            grid-template-columns: repeat(6, minmax(0, 1fr));
             gap: 10px;
             margin: 14px 0;
         }
@@ -469,17 +469,35 @@
             display:block; font-size:10px; color:#64748b; text-transform:uppercase;
             letter-spacing:.04em; margin-bottom:5px;
         }
-        .trend-timeline {
-            display:flex; gap:4px; align-items:flex-end; min-height:46px;
-            padding:10px; border-radius:10px; background:rgba(2,6,23,.3);
-            overflow-x:auto; margin-bottom:14px;
-        }
-        .trend-day { min-width:28px; height:28px; border-radius:5px; cursor:pointer; position:relative; }
-        .trend-day:hover { outline:2px solid #f8fafc; outline-offset:1px; }
-        .trend-day.bullish { background:#10b981; }
-        .trend-day.bearish { background:#ef4444; }
-        .trend-day.neutral { background:#64748b; }
-        .trend-day.continues { box-shadow: inset 0 -4px 0 #60a5fa; }
+        .trend-calendar-legend { display:flex; flex-wrap:wrap; gap:8px 16px; color:#cbd5e1; font-size:11px; margin:12px 0; }
+        .trend-calendar-legend span { white-space:nowrap; }
+        .trend-calendar-swatch { display:inline-block; width:11px; height:11px; border-radius:3px; vertical-align:-1px; margin-right:5px; }
+        .trend-calendar-swatch.bullish { background:#10b981; }
+        .trend-calendar-swatch.bearish { background:#ef4444; }
+        .trend-calendar-swatch.neutral { background:#64748b; }
+        .trend-calendar-swatch.potential { border:2px dashed #f59e0b; }
+        .trend-calendar-swatch.no-record { background:repeating-linear-gradient(135deg,#263349 0 3px,#101827 3px 6px); }
+        .trend-calendar { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,310px),1fr)); gap:14px; margin-bottom:14px; }
+        .trend-calendar-month { background:rgba(2,6,23,.3); border:1px solid rgba(255,255,255,.07); border-radius:10px; padding:12px; min-width:0; }
+        .trend-calendar-month h3 { margin:0 0 10px; color:#e2e8f0; font-size:12px; font-weight:800; }
+        .trend-calendar-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:5px; }
+        .trend-calendar-weekday { color:#94a3b8; text-align:center; font-size:10px; font-weight:800; padding:3px 0; }
+        .trend-calendar-day { width:100%; min-height:49px; padding:4px 2px; border:1px solid transparent; border-radius:7px; background:#1e293b; color:#f8fafc; text-align:center; font-size:10px; font-weight:800; position:relative; }
+        .trend-calendar-day small { display:block; font-size:8px; letter-spacing:.02em; font-weight:700; margin-top:3px; }
+        .trend-calendar-day.bullish { background:#10b981; color:#031910; }
+        .trend-calendar-day.bearish { background:#ef4444; color:#fff; }
+        .trend-calendar-day.neutral { background:#64748b; color:#fff; }
+        .trend-calendar-day.potential { background:rgba(245,158,11,.1); border:2px dashed #f59e0b; color:#fbbf24; }
+        .trend-calendar-day.no-record { background:repeating-linear-gradient(135deg,#263349 0 4px,#101827 4px 8px); color:#94a3b8; }
+        .trend-calendar-day.weekend { background:transparent; color:#64748b; }
+        .trend-calendar-day.outside { visibility:hidden; }
+        .trend-calendar-day.change::before { content:'↕'; position:absolute; top:3px; right:5px; font-size:11px; }
+        .trend-calendar-day.latest { box-shadow:0 0 0 2px #f8fafc; }
+        .trend-calendar-day.selected { outline:2px solid #3b82f6; outline-offset:3px; }
+        button.trend-calendar-day { cursor:pointer; }
+        button.trend-calendar-day:hover, button.trend-calendar-day:focus-visible { outline:2px solid #60a5fa; outline-offset:2px; }
+        .trend-calendar-help { font-size:11px; color:#94a3b8; margin:0 0 12px; }
+        .journal-selected-row td { background:rgba(59,130,246,.14); }
 
         /* UI Badges */
         .badge {
@@ -1497,7 +1515,16 @@
                 </div>
                 <div style="font-size:11px;color:#94a3b8;margin-bottom:10px;">Trend analyses, MA9 confirmations, trend changes, and saved simulations are recorded here.</div>
                 <div id="journalSummary" class="trend-summary-grid"></div>
-                <div id="trendTimeline" class="trend-timeline"><span style="color:#64748b;font-size:11px;">Run a scan to build the 20-day trend timeline.</span></div>
+                <div class="trend-calendar-legend" aria-label="Calendar legend">
+                    <span><i class="trend-calendar-swatch bullish"></i>Bullish ↑</span>
+                    <span><i class="trend-calendar-swatch bearish"></i>Bearish ↓</span>
+                    <span><i class="trend-calendar-swatch neutral"></i>Neutral —</span>
+                    <span><i class="trend-calendar-swatch potential"></i>Potential, unconfirmed</span>
+                    <span><i class="trend-calendar-swatch no-record"></i>No saved record</span>
+                    <span>↕ Confirmed change · White ring: latest · Blue ring: selected</span>
+                </div>
+                <div id="trendTimeline" class="trend-calendar" aria-label="Completed candle trend calendar"><span style="color:#94a3b8;font-size:11px;">Run a scan to build the trend calendar.</span></div>
+                <div id="trendCalendarSelection" class="trend-calendar-help">Select a dated tile to find its saved signal in the journal below. Dates use IST.</div>
                 <div class="journal-table-wrap"><table class="journal-table" style="font-size:11px;"><thead><tr><th>CANDLE (IST)</th><th>SAVED (IST)</th><th>SCAN</th><th>#</th><th>EVENT</th><th>FINAL</th><th>RAW</th><th>SIGNAL</th><th>FUTURES</th><th>DETAILS</th></tr></thead><tbody id="strategyEventBody"><tr><td colspan="10" style="text-align:center;color:#64748b;padding:20px;">No events recorded yet.</td></tr></tbody></table></div>
                 <div style="font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;margin:18px 0 8px;">Saved scans</div>
                 <div class="journal-table-wrap"><table class="journal-table" style="font-size:11px;"><thead><tr><th>SCAN</th><th>CREATED (IST)</th><th>STATUS</th><th>WINDOW</th><th>RECORDS</th><th>BULLISH</th><th>BEARISH</th><th>NEUTRAL</th><th>CHANGES</th><th>MESSAGE</th></tr></thead><tbody id="strategyScanBody"><tr><td colspan="10" style="text-align:center;color:#64748b;padding:20px;">No scans run yet.</td></tr></tbody></table></div>
@@ -2393,20 +2420,121 @@
                 .catch(err => console.error("Console Poll Error:", err));
         }
 
+        function renderTrendCalendar(signals, potential, scanId) {
+            const calendar = document.getElementById('trendTimeline');
+            const selection = document.getElementById('trendCalendarSelection');
+            if (!calendar) return;
+            const dayPattern = /^\d{4}-\d{2}-\d{2}$/;
+            const byDate = new Map();
+            signals.forEach(event => {
+                const date = String(event.candle_at || event.payload?.date || '').slice(0, 10);
+                if (dayPattern.test(date) && !byDate.has(date)) byDate.set(date, event);
+            });
+            const dates = [...byDate.keys()].sort();
+            const potentialDate = String(potential?.occurred_at || '').slice(0, 10);
+            if (!dates.length) {
+                calendar.textContent = 'Run a scan to build the completed-candle calendar.';
+                if (selection) selection.textContent = 'Select a dated tile to find its saved signal in the journal below. Dates use IST.';
+                return;
+            }
+            const firstDate = dates[0];
+            const latestDate = dates[dates.length - 1];
+            const lastDate = potential && dayPattern.test(potentialDate) && potentialDate > latestDate ? potentialDate : latestDate;
+            const firstMonth = new Date(`${firstDate.slice(0, 7)}-01T00:00:00Z`);
+            const lastMonth = new Date(`${lastDate.slice(0, 7)}-01T00:00:00Z`);
+            calendar.replaceChildren();
+            for (let month = firstMonth; month <= lastMonth; month = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 1))) {
+                const year = month.getUTCFullYear();
+                const monthNumber = month.getUTCMonth();
+                const panel = document.createElement('section');
+                panel.className = 'trend-calendar-month';
+                const heading = document.createElement('h3');
+                heading.textContent = month.toLocaleString('en-IN', {month:'long', year:'numeric', timeZone:'UTC'});
+                panel.appendChild(heading);
+                const grid = document.createElement('div');
+                grid.className = 'trend-calendar-grid';
+                ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(name => {
+                    const label = document.createElement('span');
+                    label.className = 'trend-calendar-weekday';
+                    label.textContent = name;
+                    grid.appendChild(label);
+                });
+                const leading = (month.getUTCDay() + 6) % 7;
+                for (let index = 0; index < leading; index++) {
+                    const blank = document.createElement('span');
+                    blank.className = 'trend-calendar-day outside';
+                    grid.appendChild(blank);
+                }
+                const numberOfDays = new Date(Date.UTC(year, monthNumber + 1, 0)).getUTCDate();
+                for (let number = 1; number <= numberOfDays; number++) {
+                    const date = `${year}-${String(monthNumber + 1).padStart(2, '0')}-${String(number).padStart(2, '0')}`;
+                    const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+                    const event = byDate.get(date);
+                    const isPotential = date === potentialDate && potential && date > latestDate;
+                    const tile = document.createElement(event || isPotential ? 'button' : 'span');
+                    tile.className = 'trend-calendar-day';
+                    if (date < firstDate || date > lastDate) tile.classList.add('outside');
+                    else if (event) {
+                        const trend = ['BULLISH','BEARISH','NEUTRAL'].includes(event.trend) ? event.trend : 'NEUTRAL';
+                        tile.classList.add(trend.toLowerCase());
+                        if (event.previous_trend && event.previous_trend !== event.trend) tile.classList.add('change');
+                        if (date === latestDate) tile.classList.add('latest');
+                        if (date === window.selectedTrendCalendarDate) tile.classList.add('selected');
+                        tile.type = 'button';
+                        tile.setAttribute('aria-label', `${date} IST: confirmed ${trend.toLowerCase()}${tile.classList.contains('change') ? ', trend changed' : ', trend continues'}`);
+                        tile.title = `${date} IST · ${trend} · ${String(event.signal_status || '').replaceAll('_', ' ')}`;
+                        tile.addEventListener('click', () => {
+                            window.selectedTrendCalendarDate = date;
+                            calendar.querySelectorAll('.trend-calendar-day.selected').forEach(item => item.classList.remove('selected'));
+                            tile.classList.add('selected');
+                            const details = event.payload?.details || {};
+                            if (selection) selection.textContent = `${date} IST · Confirmed ${trend} · CE ${details.ce_close ?? '—'} / MA9 ${details.ce_ma9 ?? '—'} · PE ${details.pe_close ?? '—'} / MA9 ${details.pe_ma9 ?? '—'}`;
+                            const rows = [...document.querySelectorAll('#strategyEventBody tr')];
+                            rows.forEach(row => row.classList.remove('journal-selected-row'));
+                            const row = rows.find(item => item.dataset.candleDate === date && item.dataset.scanId === scanId && item.dataset.eventType === 'HISTORICAL_SIGNAL');
+                            if (row) { row.classList.add('journal-selected-row'); row.scrollIntoView({behavior:'smooth', block:'center'}); }
+                        });
+                    } else if (isPotential) {
+                        tile.classList.add('potential');
+                        tile.type = 'button';
+                        tile.setAttribute('aria-label', `${date} IST: possible ${potential.payload?.potential_trend || 'trend change'}, not confirmed`);
+                        tile.title = 'Potential intraday change; wait for completed daily candle';
+                        tile.addEventListener('click', () => { if (selection) selection.textContent = `${date} IST · Potential ${potential.payload?.potential_trend || 'trend change'} · Not confirmed until the daily candle closes.`; });
+                    } else if (weekday === 0 || weekday === 6) tile.classList.add('weekend');
+                    else { tile.classList.add('no-record'); tile.title = `${date} IST · No saved candle record; may be a market holiday`; }
+                    tile.textContent = String(number);
+                    if (event || isPotential) {
+                        const status = document.createElement('small');
+                        status.textContent = isPotential ? 'PENDING' : tile.classList.contains('change') ? 'CHANGE' : event.signal_status?.startsWith('PAIRED_') ? 'CROSS' : event.signal_status?.startsWith('TREND_CONTINUES') ? 'CONT.' : (event.trend === 'BULLISH' ? '↑' : event.trend === 'BEARISH' ? '↓' : '—');
+                        tile.appendChild(status);
+                    } else if (tile.classList.contains('no-record')) {
+                        const status = document.createElement('small');
+                        status.textContent = 'NO RECORD';
+                        tile.appendChild(status);
+                    }
+                    grid.appendChild(tile);
+                }
+                panel.appendChild(grid);
+                calendar.appendChild(panel);
+            }
+        }
+
         function pollStrategyEvents() {
-            fetch('/api/strategy/events?limit=50')
+            fetch('/api/strategy/events?limit=250')
                 .then(r => r.json()).then(data => {
                     const body = document.getElementById('strategyEventBody');
                     if (!body) return;
-                    const signals = (data.events || []).filter(e => e.event_type === 'HISTORICAL_SIGNAL');
+                    const allSignals = (data.events || []).filter(e => e.event_type === 'HISTORICAL_SIGNAL');
+                    const scanId = allSignals[0]?.scan_id || allSignals[0]?.payload?.scan_id;
+                    const signals = allSignals.filter(e => (e.scan_id || e.payload?.scan_id) === scanId);
                     const latest = signals[0];
-                    const latestChange = (data.events || []).find(e => e.event_type === 'HISTORICAL_TREND_CHANGE');
+                    const latestChange = (data.events || []).find(e => e.event_type === 'HISTORICAL_TREND_CHANGE' && (e.scan_id || e.payload?.scan_id) === scanId && e.trend === latest?.trend);
                     const counts = { BULLISH:0, BEARISH:0, NEUTRAL:0, CHANGES:0 };
                     signals.forEach(e => { if (counts[e.trend] !== undefined) counts[e.trend]++; if (e.previous_trend && e.previous_trend !== e.trend) counts.CHANGES++; });
                     const summary = document.getElementById('journalSummary');
                     if (summary) summary.innerHTML = [
                         ['LATEST TREND', latest?.trend || '-', latest?.trend === 'BULLISH' ? '#10b981' : latest?.trend === 'BEARISH' ? '#f87171' : '#cbd5e1'],
-                        ['RECORDS', signals.length, '#f8fafc'], ['BULLISH', counts.BULLISH, '#10b981'], ['BEARISH', counts.BEARISH, '#f87171'], ['CHANGES', counts.CHANGES, '#60a5fa']
+                        ['COMPLETED DAYS', signals.length, '#f8fafc'], ['BULLISH', counts.BULLISH, '#10b981'], ['BEARISH', counts.BEARISH, '#f87171'], ['NEUTRAL', counts.NEUTRAL, '#cbd5e1'], ['CHANGES', counts.CHANGES, '#60a5fa']
                     ].map(x => `<div class="trend-summary-item"><label>${x[0]}</label><strong style="font-size:18px;color:${x[2]}">${x[1]}</strong></div>`).join('');
                     const trendEl = document.getElementById('journalDecisionTrend');
                     const actionEl = document.getElementById('journalDecisionAction');
@@ -2423,11 +2551,9 @@
                     if (confEl) confEl.textContent = latest?.signal_status?.startsWith('PAIRED_') ? 'HIGH' : latest ? 'MEDIUM' : '-';
                     const latestEl = document.getElementById('journalLatestConfirmation');
                     if (latestEl) latestEl.textContent = latest?.candle_at ? new Date(latest.candle_at).toLocaleString('en-IN') : '-';
-                    const timeline = document.getElementById('trendTimeline');
-                    if (timeline) {
-                        const days = signals.slice().sort((a,b) => (a.candle_at||'').localeCompare(b.candle_at||''));
-                        timeline.innerHTML = days.length ? days.map(e => `<div class="trend-day ${(e.trend||'NEUTRAL').toLowerCase()} ${String(e.signal_status||'').startsWith('TREND_CONTINUES') ? 'continues' : ''}" title="${e.candle_at || '-'} · ${e.trend || '-'} · ${e.signal_status || '-'}"></div>`).join('') : '<span style="color:#64748b;font-size:11px;">Run a scan to build the 20-day trend timeline.</span>';
-                    }
+                    const todayIst = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+                    const potential = (data.events || []).find(e => e.event_type === 'INTRADAY_TREND_CHANGE' && String(e.occurred_at || '').slice(0, 10) === todayIst && Date.now() - new Date(e.occurred_at).getTime() < 30 * 60000 && e.payload?.potential_trend && e.payload.potential_trend !== latest?.trend);
+                    renderTrendCalendar(signals, potential, scanId);
                     if (!data.events || !data.events.length) { body.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#64748b;padding:20px;">No events recorded yet.</td></tr>'; return; }
                     body.innerHTML = data.events.map(e => {
                     const p = e.payload || {};
@@ -2436,7 +2562,8 @@
                     const basket = p.basket || {};
                     const signalLabel = e.signal_status === 'PAIRED_BULLISH_CROSS' ? 'NEW BULLISH MA9 ALIGNMENT' : e.signal_status === 'PAIRED_BEARISH_CROSS' ? 'NEW BEARISH MA9 ALIGNMENT' : e.signal_status === 'TREND_CONTINUES_BULLISH' ? 'TREND CONTINUES BULLISH' : e.signal_status === 'TREND_CONTINUES_BEARISH' ? 'TREND CONTINUES BEARISH' : e.signal_status === 'NO_DIRECTIONAL_MA9_ALIGNMENT' ? 'NO DIRECTIONAL MA9 ALIGNMENT' : e.signal_status === 'CONFLICTING_FUTURES_CONFIRMATION' ? 'FUTURES CONTEXT ONLY' : (e.signal_status || '-');
                     const simData = encodeURIComponent(JSON.stringify({symbol:e.symbol || 'NATGASMINI', trend:e.trend, expiry:e.expiry || p.expiry, symbols:p.symbols || {}, details:d, basket:basket}));
-                    return `<tr title="${detail}"><td>${e.candle_at ? new Date(e.candle_at).toLocaleString('en-IN') : (p.date || '-')}</td><td>${e.occurred_at ? new Date(e.occurred_at).toLocaleString('en-IN') : '-'}</td><td style="font-family:monospace">${e.scan_id || p.scan_id || '-'}</td><td>${e.sequence_no || '-'}</td><td><span class="badge badge-neutral">${e.event_type}</span></td><td>${e.trend || '-'}</td><td>${e.raw_trend || p.raw_trend || '-'}</td><td>${signalLabel}</td><td>${e.futures_confirmation || d.futures_confirmation || '-'}</td><td><details><summary>View</summary><span style="color:#94a3b8">${detail}</span><br>ATM ${e.atm_strike ?? p.atm_strike ?? '-'} · ${e.expiry || p.expiry || '-'}<br><b>${basket.label || 'Basket'}:</b> ${basket.action || 'Review strategy basket'} <button class="btn btn-secondary" style="padding:2px 7px;font-size:10px" onclick="switchTab('master-console')">VIEW BASKETS</button> <button class="btn btn-primary" style="padding:2px 7px;font-size:10px" onclick="openSignalSimulator('${simData}')">SIMULATE</button></details></td></tr>`;
+                    const candleDate = String(e.candle_at || p.date || '').slice(0, 10);
+                    return `<tr data-candle-date="${/^\d{4}-\d{2}-\d{2}$/.test(candleDate) ? candleDate : ''}" data-scan-id="${e.scan_id || p.scan_id || ''}" data-event-type="${e.event_type || ''}" title="${detail}"><td>${e.candle_at ? new Date(e.candle_at).toLocaleString('en-IN') : (p.date || '-')}</td><td>${e.occurred_at ? new Date(e.occurred_at).toLocaleString('en-IN') : '-'}</td><td style="font-family:monospace">${e.scan_id || p.scan_id || '-'}</td><td>${e.sequence_no || '-'}</td><td><span class="badge badge-neutral">${e.event_type}</span></td><td>${e.trend || '-'}</td><td>${e.raw_trend || p.raw_trend || '-'}</td><td>${signalLabel}</td><td>${e.futures_confirmation || d.futures_confirmation || '-'}</td><td><details><summary>View</summary><span style="color:#94a3b8">${detail}</span><br>ATM ${e.atm_strike ?? p.atm_strike ?? '-'} · ${e.expiry || p.expiry || '-'}<br><b>${basket.label || 'Basket'}:</b> ${basket.action || 'Review strategy basket'} <button class="btn btn-secondary" style="padding:2px 7px;font-size:10px" onclick="switchTab('master-console')">VIEW BASKETS</button> <button class="btn btn-primary" style="padding:2px 7px;font-size:10px" onclick="openSignalSimulator('${simData}')">SIMULATE</button></details></td></tr>`;
                     }).join('');
                     const journalWrap = body.closest('.journal-table-wrap');
                     if (journalWrap) journalWrap.scrollLeft = 0;
