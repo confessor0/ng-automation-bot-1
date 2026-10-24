@@ -21,7 +21,9 @@ def get_year_code(date_obj):
 def get_next_expiry_symbol_suffix(current_date=None, symbol=None):
     """
     Determines the suffix for the current/next symbol.
-    Logic: If today < Expiry Day for the symbol, use Current Month. Else Next Month.
+    Use one shared contract month for futures and options. On the option
+    expiry date (or later), roll both instruments to the next month so the
+    generated basket never mixes expiries.
     """
     if current_date is None:
         current_date = datetime.now()
@@ -31,9 +33,9 @@ def get_next_expiry_symbol_suffix(current_date=None, symbol=None):
     if symbol and symbol in SYMBOL_SPECS:
         expiry_day = SYMBOL_SPECS[symbol].get("expiry_day", 24)
     
-    # Simple logic: If we are past the specific expiry_day, move to next month
+    # On or after the option expiry day, move the shared contract month forward.
     target_date = current_date
-    if current_date.day > expiry_day:
+    if current_date.day >= expiry_day:
         # Move to next month
         if current_date.month == 12:
             target_date = current_date.replace(year=current_date.year+1, month=1, day=1)
