@@ -1929,26 +1929,42 @@ def run_simulation():
     exit_prices = data.get("exit_prices") or {}
     quantity_overrides = data.get("quantities") or {}
     charges_input = data.get("charges") or {}
+    market_model = data.get("market_model") or {}
+    execution_model = data.get("execution_model") or {}
     try:
         brokerage_per_quantity = max(0.0, float(charges_input.get("brokerage_per_quantity", 0)))
         tax_percent = max(0.0, float(charges_input.get("tax_percent", 0)))
+        exchange_percent = max(0.0, float(charges_input.get("exchange_percent", 0)))
+        ctt_percent = max(0.0, float(charges_input.get("ctt_percent", 0)))
+        sebi_percent = max(0.0, float(charges_input.get("sebi_percent", 0)))
+        stamp_percent = max(0.0, float(charges_input.get("stamp_percent", 0)))
+        gst_percent = max(0.0, float(charges_input.get("gst_percent", 0)))
         slippage_percent = max(0.0, float(charges_input.get("slippage_percent", 0)))
         margin_rate = max(0.0, float(charges_input.get("margin_rate", 12)))
+        hedge_benefit_percent = min(100.0, max(0.0, float(charges_input.get("hedge_benefit_percent", 0))))
         capital_available = float(data.get("capital_available") or 0)
+        implied_volatility = max(0.0, float(market_model.get("implied_volatility", 0)))
+        volatility_change = float(market_model.get("volatility_change", 0))
+        fill_probability = min(100.0, max(0.0, float(execution_model.get("fill_probability", 100))))
+        partial_fill_percent = min(100.0, max(0.0, float(execution_model.get("partial_fill_percent", 100))))
+        order_delay_minutes = max(0.0, float(execution_model.get("order_delay_minutes", 0)))
+        stop_loss = max(0.0, float(data.get("stop_loss_amount") or 0))
+        target_profit = max(0.0, float(data.get("target_profit_amount") or 0))
     except (TypeError, ValueError):
-        return jsonify({"status": "error", "message": "Charges, margin rate, and capital must be numeric"}), 400
+        return jsonify({"status": "error", "message": "Simulator assumptions must be numeric"}), 400
     simulated_legs, errors = [], []
     total_pnl = total_entry_value = total_exit_value = total_turnover = total_brokerage = 0.0
 
     for index, leg in enumerate(raw_legs, 1):
         key = str(leg.get("seq", index))
         symbol = leg.get("symbol") or leg.get("trading_symbol") or f"LEG_{key}"
-        entry_raw = entry_prices.get(key, entry_prices.get(symbol, leg.get("fill_price") or leg.get("ltp")))
-        exit_raw = exit_prices.get(key, exit_prices.get(symbol))
+        entry_raw = entry_prices.get(key, entry_prices.get(symbol, leg.get("limit_price") or leg.get("entry_limit_price") or leg.get("entry") or leg.get("fill_price") or leg.get("ltp")))
+        exit_raw = exit_prices.get(key, exit_prices.get(symbol, leg.get("exit") or leg.get("mark_price") or leg.get("ltp")))
         try:
             entry_price = float(entry_raw)
             exit_price = float(exit_raw)
             qty = float(quantity_overrides.get(key, quantity_overrides.get(symbol, leg.get("qty", 0)))) * multiplier
+            qty *= partial_fill_percent / 100.0
             if entry_price < 0 or exit_price < 0 or qty <= 0:
                 raise ValueError("price must be non-negative and quantity positive")
         except (TypeError, ValueError):
@@ -1983,17 +1999,43 @@ def run_simulation():
             "adjusted_entry_price": round(adjusted_entry, 4), "adjusted_exit_price": round(adjusted_exit, 4),
             "entry_value": round(entry_value, 2), "exit_value": round(exit_value, 2),
             "gross_pnl": round(pnl, 2), "brokerage": round(brokerage, 2),
+            "bid": leg.get("bid"), "ask": leg.get("ask"),
+            "limit_price": leg.get("limit_price") or leg.get("entry_limit_price"),
+            "implied_volatility": leg.get("implied_volatility", implied_volatility),
+            "order_type": str(leg.get("order_type") or execution_model.get("order_type") or "LIMIT").upper(),
             "pnl": round(pnl - brokerage, 2), "holding_hours": round((exit_dt - entry_dt).total_seconds() / 3600, 4),
         })
 
     if errors:
         return jsonify({"status": "error", "message": "Missing simulator inputs", "errors": errors}), 400
 
-    taxes = total_turnover * (tax_percent / 100)
-    net_pnl = total_pnl - total_brokerage - taxes
+    generic_tax = total_turnover * (tax_percent / 100)
+    exchange_charges = total_turnover * (exchange_percent / 100)
+    ctt_charges = total_turnover * (ctt_percent / 100)
+    sebi_charges = total_turnover * (sebi_percent / 100)
+    stamp_charges = total_turnover * (stamp_percent / 100)
+    gst_charges = (total_brokerage + exchange_charges + sebi_charges) * (gst_percent / 100)
+    taxes = generic_tax + ctt_charges + stamp_charges + gst_charges
+    total_charges = total_brokerage + taxes + exchange_charges + sebi_charges
+    net_pnl = total_pnl - total_charges
     margin_notional = sum(abs(leg["entry_value"]) for leg in simulated_legs)
-    estimated_margin = margin_notional * (margin_rate / 100)
+    estimated_margin = margin_notional * (margin_rate / 100) * (1 - hedge_benefit_percent / 100)
     risk_warnings = _simulation_risk_warnings(simulated_legs)
+    if fill_probability < 100:
+        risk_warnings.append(f"Limit fill probability assumption is {fill_probability:.1f}%.")
+    if partial_fill_percent < 100:
+        risk_warnings.append(f"Partial fills reduce simulated quantity to {partial_fill_percent:.1f}%.")
+    if order_delay_minutes:
+        risk_warnings.append(f"Execution delay assumption: {order_delay_minutes:g} minutes.")
+    option_legs = [leg for leg in simulated_legs if leg.get("instrument") == "OPT"]
+    if option_legs and implied_volatility <= 0:
+        risk_warnings.append("No implied volatility supplied; option time value remains an estimate.")
+    if market_model.get("quote_timestamp"):
+        market_model["quote_timestamp"] = str(market_model["quote_timestamp"])
+    if stop_loss and net_pnl <= -abs(stop_loss):
+        risk_warnings.append("Simulated P&L reaches the configured stop-loss.")
+    if target_profit and net_pnl >= abs(target_profit):
+        risk_warnings.append("Simulated P&L reaches the configured target.")
     payoff_profile, max_loss, max_profit, break_evens = _simulation_payoff_profile(
         simulated_legs, data.get("underlying_price") or data.get("atm_strike") or data.get("market_price"),
         lot_size, total_brokerage + taxes,
@@ -2010,10 +2052,12 @@ def run_simulation():
         "exit_reason": data.get("exit_reason", "CUSTOM_EXIT"),
         "legs": simulated_legs, "gross_pnl": round(total_pnl, 2),
         "brokerage": round(total_brokerage, 2), "taxes": round(taxes, 2),
-        "total_charges": round(total_brokerage + taxes, 2), "total_pnl": round(net_pnl, 2),
+        "charges_breakdown": {"brokerage": round(total_brokerage, 2), "generic_tax": round(generic_tax, 2), "exchange": round(exchange_charges, 2), "ctt": round(ctt_charges, 2), "sebi": round(sebi_charges, 2), "stamp": round(stamp_charges, 2), "gst": round(gst_charges, 2)},
+        "total_charges": round(total_charges, 2), "total_pnl": round(net_pnl, 2),
         "net_entry_value": round(total_entry_value, 2),
         "net_exit_value": round(total_exit_value, 2),
         "estimated_margin": round(estimated_margin, 2), "capital_available": capital_available or None,
+        "assumptions": {"market_model": market_model, "execution_model": execution_model, "charges": charges_input, "stop_loss_amount": stop_loss or None, "target_profit_amount": target_profit or None},
         "capital_shortfall": round(max(0, estimated_margin - capital_available), 2) if capital_available else None,
         "return_on_entry_pct": round((net_pnl / abs(total_entry_value) * 100), 4) if total_entry_value else None,
         "return_on_capital_pct": round((net_pnl / estimated_margin * 100), 4) if estimated_margin else None,
