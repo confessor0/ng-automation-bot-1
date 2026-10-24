@@ -155,7 +155,8 @@ class OrderIntentEngine:
         if basket_type == "ENTRY" and strategy_name.startswith("Strategy 1"):
             interval = specs.get("interval", 5)
             if direction == "BULLISH":
-                legs = [("BUY", None, None, 6),
+                legs = [("BUY", atm_strike + interval, "PE", 12),
+                        ("BUY", None, None, 6),
                         ("BUY", atm_strike - 2 * interval, "CE", 6),
                         ("SELL", atm_strike, "CE", 4), ("SELL", atm_strike, "PE", 4)]
             else:
