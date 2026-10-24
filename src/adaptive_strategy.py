@@ -77,15 +77,20 @@ def build_recommendation(
         combined_premium = ce_premium + pe_premium
         put_strike = _round_strike(atm_strike - combined_premium, option_interval)
         call_strike = _round_strike(atm_strike + combined_premium, option_interval)
-        if put_strike >= atm_strike or call_strike <= atm_strike:
-            return _wait("STRATEGY_2", "Calculated hedge strikes are invalid for the current premiums.", cmp, atm_strike, expiry, signal_status)
+        hedge_valid = put_strike < atm_strike and call_strike > atm_strike
+        if not hedge_valid:
+            # Keep a reviewable basket visible even when current premiums are
+            # too large for a valid S ± premium strike. These are placeholders
+            # for review only; validation remains blocked.
+            put_strike = atm_strike - (2 * option_interval)
+            call_strike = atm_strike + (2 * option_interval)
         legs = [
             _leg("SELL", "OPT", atm_strike, "PE", 10, pe_symbol, pe_premium),
             _leg("SELL", "OPT", atm_strike, "CE", 10, ce_symbol, ce_premium),
             _leg("BUY", "OPT", put_strike, "PE", 10, symbol_builder(base, "OPT", expiry, put_strike, "PE"), quote(symbol_builder(base, "OPT", expiry, put_strike, "PE"))),
             _leg("BUY", "OPT", call_strike, "CE", 10, symbol_builder(base, "OPT", expiry, call_strike, "CE"), quote(symbol_builder(base, "OPT", expiry, call_strike, "CE"))),
         ]
-        validation = _validation(legs, premiums_available=premiums_available)
+        validation = _validation(legs, premiums_available=premiums_available, hedge_valid=hedge_valid)
         # Neutral legs are useful as a trade plan even before the range is
         # confirmed. Keep them visible, but do not mark them executable.
         if futures_confirmation != "CONSOLIDATION":
@@ -96,9 +101,10 @@ def build_recommendation(
             "direction": "NEUTRAL",
             "status": "READY" if validation["execution_ready"] else "CONSIDER",
             "signal_status": signal_status,
-            "rationale": ("Range-bound futures action with a protected ATM straddle."
-                          if futures_confirmation == "CONSOLIDATION"
-                          else "Neutral options setup to consider; wait for futures consolidation confirmation before execution."),
+            "rationale": (("Range-bound futures action with a protected ATM straddle."
+                           if futures_confirmation == "CONSOLIDATION"
+                           else "Neutral options setup to consider; wait for futures consolidation confirmation before execution.")
+                          + (" Dynamic premium hedge strikes are invalid at current premiums; review fallback wings before execution." if not hedge_valid else "")),
             "market_context": {"current_price": cmp, "atm_strike": atm_strike, "expiry": expiry, "combined_premium": round(combined_premium, 4), "hedge_rule": "S ± (ATM CE + ATM PE), rounded to valid strike"},
             "legs": legs,
             "validation": validation,
