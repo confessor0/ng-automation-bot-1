@@ -1460,6 +1460,15 @@ def scan_strategy_history():
 
         summary = {"scan_id": scan_id, "status": "COMPLETED", "symbol": symbol,
                    "expiry": expiry, "atm_strike": atm, "records": len(records), **counts}
+        if records:
+            latest = records[-1]
+            state_mgr.update("trend", latest["trend"])
+            state_mgr.update("ng_strategy_state", {
+                **state_mgr.get_state().get("ng_strategy_state", {}),
+                "trend_bias": latest["trend"],
+                "signal_source": latest["signal_status"],
+                "engine_heartbeat": datetime.now().timestamp(),
+            })
         db.save_scan_run(scan_id, symbol, days, records[0]["date"] if records else None,
                          records[-1]["date"] if records else None, "COMPLETED", summary)
         return jsonify({"status": "success", "scan": summary, "records": records})
