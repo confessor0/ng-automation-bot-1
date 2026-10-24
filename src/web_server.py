@@ -1307,6 +1307,159 @@ def get_strategy_events():
     return jsonify({"events": events, "count": len(events)})
 
 
+@app.route('/api/strategy/scans', methods=['GET'])
+@login_required
+def get_strategy_scans():
+    from src.database import UnifiedOrderManager
+    rows = UnifiedOrderManager.get_instance().list_scan_runs(
+        limit=request.args.get('limit', 25, type=int),
+        symbol=request.args.get('symbol'),
+    )
+    return jsonify({"scans": rows, "count": len(rows)})
+
+
+@app.route('/api/strategy/scan', methods=['POST'])
+@login_required
+def scan_strategy_history():
+    """Scan the last completed daily candles using the live strategy rules.
+
+    This is deliberately manual: one click makes the required Fyers history
+    calls, appends the results to the event journal, and stores a scan summary.
+    It never places an order and does not alter the existing connection flow.
+    """
+    import uuid
+    from src.database import UnifiedOrderManager
+    from src.utils import get_next_expiry_symbol_suffix, get_atm_strike, construct_symbol
+    from src.market_data import MarketDataEngine
+    from src.strategy import StrategyEngine
+
+    data = request.get_json(silent=True) or {}
+    symbol = str(data.get("symbol", "NATGASMINI")).upper()
+    try:
+        days = max(1, min(int(data.get("days", 20)), 60))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "days must be a number"}), 400
+
+    scan_id = "SCAN_" + uuid.uuid4().hex[:12].upper()
+    db = UnifiedOrderManager.get_instance()
+    try:
+        broker = ensure_broker_connected()
+        if not broker or not broker.fyers:
+            return jsonify({"status": "error", "message": "Fyers is not connected"}), 503
+
+        expiry = get_next_expiry_symbol_suffix(symbol=symbol)
+        fut_symbol = construct_symbol(symbol, "FUT", expiry)
+        market_data = MarketDataEngine(broker, symbol_base=symbol)
+        current_fut = market_data._get_ltp(fut_symbol)
+        if not current_fut:
+            return jsonify({"status": "error", "message": "Unable to determine ATM from futures price"}), 502
+        atm = get_atm_strike(current_fut, symbol)
+        ce_symbol = construct_symbol(symbol, "OPT", expiry, atm, "CE")
+        pe_symbol = construct_symbol(symbol, "OPT", expiry, atm, "PE")
+        engine = StrategyEngine(broker, market_data)
+        frames = {"fut": engine._fetch_history(fut_symbol),
+                  "ce": engine._fetch_history(ce_symbol),
+                  "pe": engine._fetch_history(pe_symbol)}
+
+        def by_date(frame):
+            if frame is None or frame.empty:
+                return {}
+            result = {}
+            for _, row in frame.iterrows():
+                stamp = float(row["epoch"])
+                day = datetime.fromtimestamp(stamp).strftime("%Y-%m-%d")
+                result[day] = {"epoch": int(stamp), "close": float(row["close"])}
+            return result
+
+        dated = {name: by_date(frame) for name, frame in frames.items()}
+        today_key = datetime.now().strftime("%Y-%m-%d")
+        common_dates = sorted((set(dated["fut"]) & set(dated["ce"]) & set(dated["pe"])) - {today_key})
+        if len(common_dates) < 10:
+            summary = {"scan_id": scan_id, "status": "INSUFFICIENT_HISTORY",
+                       "records": len(common_dates), "required": 10}
+            db.save_scan_run(scan_id, symbol, days, common_dates[0] if common_dates else None,
+                             common_dates[-1] if common_dates else None, "INSUFFICIENT_HISTORY", summary)
+            return jsonify({"status": "error", "message": "At least 10 common completed daily records are required", "scan": summary}), 422
+
+        # Scan only the requested latest completed records, while retaining
+        # enough earlier candles to calculate each MA9 and previous-day cross.
+        selected = common_dates[-days:]
+        all_dates = common_dates
+        first_selected_index = len(all_dates) - len(selected)
+        records, previous_trend = [], "NEUTRAL"
+        counts = {"BULLISH": 0, "BEARISH": 0, "NEUTRAL": 0, "CHANGED": 0}
+
+        for idx, day in enumerate(selected, start=first_selected_index):
+            if idx < 9:
+                continue
+            def close(name, offset=0):
+                return dated[name][all_dates[idx + offset]]["close"]
+            def ma(name, end_idx):
+                values = [dated[name][all_dates[j]]["close"] for j in range(end_idx - 8, end_idx + 1)]
+                return sum(values) / 9.0
+
+            ce_prev, ce_now = close("ce", -1), close("ce")
+            pe_prev, pe_now = close("pe", -1), close("pe")
+            fut_now = close("fut")
+            ce_prev_ma, ce_ma = ma("ce", idx - 1), ma("ce", idx)
+            pe_prev_ma, pe_ma = ma("pe", idx - 1), ma("pe", idx)
+            fut_ma = ma("fut", idx)
+            pe_below = pe_now < pe_ma
+            ce_below = ce_now < ce_ma
+            pe_crossed_below = pe_prev >= pe_prev_ma and pe_now < pe_ma
+            pe_crossed_above = pe_prev <= pe_prev_ma and pe_now > pe_ma
+            ce_crossed_below = ce_prev >= ce_prev_ma and ce_now < ce_ma
+            ce_crossed_above = ce_prev <= ce_prev_ma and ce_now > ce_ma
+            both_below = ce_below and pe_below
+            futures_confirmation = "BULLISH" if fut_now > fut_ma else ("BEARISH" if fut_now < fut_ma else "CONSOLIDATION")
+            if pe_crossed_below and ce_crossed_above:
+                trend, signal_status = "BULLISH", "PAIRED_BULLISH_CROSS"
+            elif ce_crossed_below and pe_crossed_above:
+                trend, signal_status = "BEARISH", "PAIRED_BEARISH_CROSS"
+            elif both_below:
+                trend, signal_status = "NEUTRAL", "BOTH_OPTIONS_BELOW_MA9"
+            else:
+                trend, signal_status = "NEUTRAL", "NO_PAIRED_CROSS"
+            if trend in ("BULLISH", "BEARISH") and futures_confirmation != trend:
+                signal_status = "CONFLICTING_FUTURES_CONFIRMATION"
+            elif trend == "NEUTRAL" and both_below and futures_confirmation in ("BULLISH", "BEARISH"):
+                signal_status = "CONFLICTING_FUTURES_CONFIRMATION"
+
+            changed = previous_trend != trend
+            if changed: counts["CHANGED"] += 1
+            counts[trend] += 1
+            detail = {"signal_rule": "STRATEGY_2", "signal_status": signal_status,
+                      "ce_close": round(ce_now, 4), "ce_ma9": round(ce_ma, 4),
+                      "pe_close": round(pe_now, 4), "pe_ma9": round(pe_ma, 4),
+                      "futures_close": round(fut_now, 4), "futures_ma9": round(fut_ma, 4),
+                      "futures_confirmation": futures_confirmation,
+                      "completed_candle_epoch": dated["fut"][day]["epoch"]}
+            payload = {"scan_id": scan_id, "date": day, "previous_trend": previous_trend,
+                       "trend_changed": changed, "expiry": expiry, "atm_strike": atm,
+                       "symbols": {"fut": fut_symbol, "ce": ce_symbol, "pe": pe_symbol}}
+            db.record_strategy_event("HISTORICAL_SIGNAL", symbol, trend, detail, expiry, atm, fut_now,
+                                     {**payload, "details": detail})
+            if changed:
+                db.record_strategy_event("HISTORICAL_TREND_CHANGE", symbol, trend, detail, expiry, atm, fut_now, payload)
+            records.append({"date": day, "trend": trend, "signal_status": signal_status,
+                            "futures_confirmation": futures_confirmation,
+                            "ce": {"price": round(ce_now, 4), "ma9": round(ce_ma, 4), "crossed_below": ce_crossed_below, "crossed_above": ce_crossed_above},
+                            "pe": {"price": round(pe_now, 4), "ma9": round(pe_ma, 4), "crossed_below": pe_crossed_below, "crossed_above": pe_crossed_above},
+                            "futures": {"price": round(fut_now, 4), "ma9": round(fut_ma, 4)}})
+            previous_trend = trend
+
+        summary = {"scan_id": scan_id, "status": "COMPLETED", "symbol": symbol,
+                   "expiry": expiry, "atm_strike": atm, "records": len(records), **counts}
+        db.save_scan_run(scan_id, symbol, days, records[0]["date"] if records else None,
+                         records[-1]["date"] if records else None, "COMPLETED", summary)
+        return jsonify({"status": "success", "scan": summary, "records": records})
+    except Exception as exc:
+        summary = {"scan_id": scan_id, "status": "ERROR", "message": str(exc)}
+        db.save_scan_run(scan_id, symbol, days, None, None, "ERROR", summary)
+        print(f"⚠️ Historical strategy scan failed: {exc}")
+        return jsonify({"status": "error", "message": str(exc), "scan": summary}), 500
+
+
 def _parse_simulation_time(value, field_name):
     from datetime import timezone
     if not value:

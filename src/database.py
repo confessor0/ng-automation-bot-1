@@ -93,6 +93,19 @@ class UnifiedOrderManager:
                     result_data TEXT NOT NULL
                 )
             """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS scan_runs (
+                    scan_id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    days_requested INTEGER NOT NULL,
+                    from_date TEXT,
+                    to_date TEXT,
+                    status TEXT NOT NULL,
+                    summary TEXT NOT NULL
+                )
+            """)
             conn.commit()
 
     def upsert_basket(self, basket_data: dict):
@@ -301,4 +314,30 @@ class UnifiedOrderManager:
         for row in rows:
             row["input_data"] = json.loads(row["input_data"] or "{}")
             row["result_data"] = json.loads(row["result_data"] or "{}")
+        return rows
+
+    def save_scan_run(self, scan_id, symbol, days_requested, from_date,
+                      to_date, status, summary):
+        with sqlite3.connect(self.DB_PATH) as conn:
+            conn.execute("""
+                INSERT INTO scan_runs
+                (scan_id, created_at, symbol, days_requested, from_date,
+                 to_date, status, summary)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (scan_id, datetime.now().isoformat(), symbol, days_requested,
+                  from_date, to_date, status, json.dumps(summary, default=str)))
+            conn.commit()
+
+    def list_scan_runs(self, limit=25, symbol=None):
+        query = "SELECT * FROM scan_runs"
+        params = []
+        if symbol:
+            query += " WHERE symbol = ?"; params.append(symbol)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, min(int(limit or 25), 200)))
+        with sqlite3.connect(self.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = [dict(row) for row in conn.execute(query, params).fetchall()]
+        for row in rows:
+            row["summary"] = json.loads(row["summary"] or "{}")
         return rows

@@ -1423,10 +1423,12 @@
             <div class="card" style="margin-top:24px;">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                     <div class="card-title" style="margin:0;">🧾 Strategy Event Journal</div>
-                    <button class="btn btn-secondary" style="padding:5px 10px;font-size:11px;" onclick="pollStrategyEvents()">REFRESH EVENTS</button>
+                    <div style="display:flex;gap:8px;"><button class="btn btn-primary" style="padding:5px 10px;font-size:11px;" onclick="runTwentyDayScan(this)">🔎 SCAN LAST 20 DAYS</button><button class="btn btn-secondary" style="padding:5px 10px;font-size:11px;" onclick="pollStrategyEvents();pollStrategyScans()">REFRESH</button></div>
                 </div>
                 <div style="font-size:11px;color:#94a3b8;margin-bottom:10px;">Trend analyses, MA9 confirmations, trend changes, and saved simulations are recorded here.</div>
                 <div style="overflow:auto;"><table style="font-size:11px;"><thead><tr><th>TIME</th><th>EVENT</th><th>TREND</th><th>SIGNAL</th><th>FUTURES</th><th>PRICE</th></tr></thead><tbody id="strategyEventBody"><tr><td colspan="6" style="text-align:center;color:#64748b;padding:20px;">No events recorded yet.</td></tr></tbody></table></div>
+                <div style="font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;margin:18px 0 8px;">Saved scans</div>
+                <div style="overflow:auto;"><table style="font-size:11px;"><thead><tr><th>SCAN</th><th>CREATED</th><th>WINDOW</th><th>RECORDS</th><th>BULLISH</th><th>BEARISH</th><th>NEUTRAL</th><th>CHANGES</th></tr></thead><tbody id="strategyScanBody"><tr><td colspan="8" style="text-align:center;color:#64748b;padding:20px;">No scans run yet.</td></tr></tbody></table></div>
             </div>
         </div>
 
@@ -2325,6 +2327,26 @@
                     if (!data.events || !data.events.length) { body.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#64748b;padding:20px;">No events recorded yet.</td></tr>'; return; }
                     body.innerHTML = data.events.map(e => `<tr><td>${e.occurred_at ? new Date(e.occurred_at).toLocaleString() : '-'}</td><td><span class="badge badge-neutral">${e.event_type}</span></td><td>${e.trend || '-'}</td><td>${e.signal_status || '-'}</td><td>${e.futures_confirmation || '-'}</td><td>${e.market_price ?? '-'}</td></tr>`).join('');
                 }).catch(err => console.error('Event journal error:', err));
+        }
+
+        function pollStrategyScans() {
+            fetch('/api/strategy/scans?limit=25').then(r => r.json()).then(data => {
+                const body = document.getElementById('strategyScanBody');
+                if (!body) return;
+                if (!data.scans || !data.scans.length) { body.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#64748b;padding:20px;">No scans run yet.</td></tr>'; return; }
+                body.innerHTML = data.scans.map(s => { const x=s.summary||{}; return `<tr><td style="font-family:monospace">${s.scan_id}</td><td>${s.created_at ? new Date(s.created_at).toLocaleString() : '-'}</td><td>${s.from_date||'-'} → ${s.to_date||'-'}</td><td>${x.records??'-'}</td><td style="color:#10b981">${x.BULLISH??0}</td><td style="color:#f87171">${x.BEARISH??0}</td><td>${x.NEUTRAL??0}</td><td>${x.CHANGED??0}</td></tr>`; }).join('');
+            }).catch(err => console.error('Scan history error:', err));
+        }
+
+        function runTwentyDayScan(button) {
+            if (button) { button.disabled = true; button.textContent = '⏳ SCANNING…'; }
+            fetch('/api/strategy/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({symbol:'NATGASMINI', days:20})})
+                .then(r => r.json()).then(data => {
+                    if (data.status !== 'success') alert(data.message || 'Scan failed');
+                    else alert(`Scan saved: ${data.scan.records} records, ${data.scan.CHANGED} trend changes.`);
+                    pollStrategyEvents(); pollStrategyScans();
+                }).catch(err => alert('Scan error: ' + err.message))
+                .finally(() => { if (button) { button.disabled = false; button.textContent = '🔎 SCAN LAST 20 DAYS'; } });
         }
 
         function updateMasterSummary(baskets) {
