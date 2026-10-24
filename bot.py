@@ -126,6 +126,27 @@ class TradingBot:
             # Count sustained candles in same trend direction
             prev_trend = inst_state.get("previous_trend", "NEUTRAL")
             sustained = inst_state.get("trend_sustained_candles", 0)
+
+            # Persist background-engine observations as well as on-demand
+            # dashboard refreshes. This is audit-only and does not alter FYERS.
+            try:
+                from src.database import UnifiedOrderManager
+                db = UnifiedOrderManager.get_instance()
+                payload = {"previous_trend": prev_trend, "trend_changed": prev_trend != trend,
+                           "details": details, "sustained_candles": sustained}
+                db.record_strategy_event("TREND_ANALYSIS", symbol, trend,
+                                         details, expiry, atm_strike, market_price, payload)
+                if details.get("futures_confirmation"):
+                    db.record_strategy_event("FUTURES_CONFIRMATION", symbol, trend,
+                                             details, expiry, atm_strike, market_price,
+                                             {"confirmation": details.get("futures_confirmation")})
+                if prev_trend != trend:
+                    db.record_strategy_event("TREND_CHANGE", symbol, trend,
+                                             details, expiry, atm_strike, market_price,
+                                             {"previous_trend": prev_trend, "new_trend": trend})
+            except Exception as event_error:
+                print(f"⚠️ Strategy event persistence failed: {event_error}")
+
             if trend == prev_trend and trend in ["BULLISH", "BEARISH"]:
                 sustained += 1
             else:
@@ -266,6 +287,10 @@ class TradingBot:
 
         while self.running:
             try:
+                # Delayed email events are checked without triggering market API polling.
+                from src.notification_service import process_due_trend_notification
+                process_due_trend_notification(self.state_mgr)
+
                 # [NEW] Market Hours Check (IST)
                 if not is_market_open():
                     ist_now = get_ist_time().strftime("%H:%M:%S")
