@@ -1462,7 +1462,7 @@ def scan_strategy_history():
             elif both_below:
                 raw_trend, signal_status = "NEUTRAL", "BOTH_OPTIONS_BELOW_MA9"
             else:
-                raw_trend, signal_status = "NEUTRAL", "NO_PAIRED_CROSS"
+                raw_trend, signal_status = "NEUTRAL", "NO_DIRECTIONAL_MA9_ALIGNMENT"
             trend = raw_trend
             # Completed option closes versus MA9 are the trend confirmation.
             # Futures remains diagnostic context and never vetoes the setup.

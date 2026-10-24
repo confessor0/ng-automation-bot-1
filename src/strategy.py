@@ -200,7 +200,7 @@ class StrategyEngine:
         elif both_below:
             trend, status = "NEUTRAL", "BOTH_OPTIONS_BELOW_MA9"
         else:
-            trend, status = "NEUTRAL", "NO_PAIRED_CROSS"
+            trend, status = "NEUTRAL", "NO_DIRECTIONAL_MA9_ALIGNMENT"
 
         # A confirmed trend remains active until an opposite option alignment
         # appears. The completed CE/PE closes are the confirmation source;
