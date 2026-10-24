@@ -126,9 +126,6 @@ class AdjustmentEngine:
                 "analysis": analysis
             }
         
-        # Save snapshot (candle close)
-        self.positions_analyzer.save_snapshot()
-        
         # Check rules in priority order
         for rule in sorted(self.rules, key=lambda r: r.priority):
             if rule.check(analysis):

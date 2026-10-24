@@ -7,11 +7,9 @@ def verify_env():
     print("="*50)
     
     env_vars = [
-        "FYERS_ID", 
-        "FYERS_PIN", 
-        "FYERS_TOTP_KEY", 
         "FYERS_APP_ID", 
         "FYERS_SECRET_ID",
+        "FYERS_ACCESS_TOKEN",
         "FYERS_REDIRECT_URI",
         "PORT"
     ]

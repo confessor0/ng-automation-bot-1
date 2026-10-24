@@ -95,6 +95,12 @@ class OrderIntentEngine:
         
         Returns: {success: bool, intent: dict}
         """
+        admin_config = self.state_mgr.get_state().get("admin_config", {})
+        if basket_type.upper() == "ENTRY" and admin_config.get("news_risk_enabled", False):
+            return {"success": False, "message": "New entries are blocked by the active News / Event Risk control."}
+        if basket_type.upper() == "ENTRY" and admin_config.get("active_strategy") == "STRATEGY_2":
+            return {"success": False, "message": "Strategy 2 signal is active, but its position quantities and order legs are not configured yet."}
+
         # Check if there's already a pending intent
         if self._current_intent and self._current_intent.get("status") in ["DRAFT", "VALIDATED"]:
             return {

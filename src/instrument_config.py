@@ -1,7 +1,7 @@
 """
-Multi-Instrument Calibration Configuration
+Natural Gas Mini Calibration Configuration
 
-Central configuration for all supported instruments.
+Central configuration for the supported instrument.
 Provides percentage-based hedge/wing distance calculations.
 NO strategy logic changes — only parameterization.
 """
@@ -15,108 +15,17 @@ import math
 
 INSTRUMENT_CALIBRATION = {
     "NATGASMINI": {
-        "display_name": "Natural Gas",
+        "display_name": "Natural Gas Mini",
         "exchange": "MCX",
-        "lot_size": 250,
+        "lot_size": 1250,
         "strike_interval": 5,
         "expiry_day": 24,
-        "hedge_pct": 0.06,      # 6%
-        "wings_pct": 0.12,      # 12%
+        "hedge_pct": 0.06,
+        "wings_pct": 0.12,
         "fut_lots": 5,
         "hedge_lots": 5,
         "fly_lots": 2,
         "segment": "COMMODITY",
-    },
-    "CRUDEOILM": {
-        "display_name": "Crude Oil",
-        "exchange": "MCX",
-        "lot_size": 10,
-        "strike_interval": 100,
-        "expiry_day": 18,
-        "hedge_pct": 0.04,      # 4%
-        "wings_pct": 0.08,      # 8%
-        "fut_lots": 5,
-        "hedge_lots": 5,
-        "fly_lots": 2,
-        "segment": "COMMODITY",
-    },
-    "SILVERM": {
-        "display_name": "Silver",
-        "exchange": "MCX",
-        "lot_size": 5,
-        "strike_interval": 250,
-        "expiry_day": 28,
-        "hedge_pct": 0.03,      # 3%
-        "wings_pct": 0.06,      # 6%
-        "fut_lots": 5,
-        "hedge_lots": 5,
-        "fly_lots": 2,
-        "segment": "COMMODITY",
-    },
-    "GOLDM": {
-        "display_name": "Gold",
-        "exchange": "MCX",
-        "lot_size": 10,
-        "strike_interval": 100,
-        "expiry_day": 4,
-        "hedge_pct": 0.02,      # 2%
-        "wings_pct": 0.04,      # 4%
-        "fut_lots": 5,
-        "hedge_lots": 5,
-        "fly_lots": 2,
-        "segment": "COMMODITY",
-    },
-    "ALUMINI": {
-        "display_name": "Aluminium",
-        "exchange": "MCX",
-        "lot_size": 5000,
-        "strike_interval": 2,
-        "expiry_day": 28,
-        "hedge_pct": 0.03,      # 3%
-        "wings_pct": 0.06,      # 6%
-        "fut_lots": 5,
-        "hedge_lots": 5,
-        "fly_lots": 2,
-        "segment": "COMMODITY",
-    },
-    "NICKEL": {
-        "display_name": "Nickel",
-        "exchange": "MCX",
-        "lot_size": 250,
-        "strike_interval": 50,
-        "expiry_day": 28,
-        "hedge_pct": 0.05,      # 5%
-        "wings_pct": 0.10,      # 10%
-        "fut_lots": 5,
-        "hedge_lots": 5,
-        "fly_lots": 2,
-        "segment": "COMMODITY",
-    },
-    "NIFTY": {
-        "display_name": "Nifty",
-        "exchange": "NSE",
-        "lot_size": 25,
-        "strike_interval": 50,
-        "expiry_day": 0,        # Last Thursday (special handling)
-        "hedge_pct": 0.015,     # 1.5%
-        "wings_pct": 0.03,      # 3%
-        "fut_lots": 5,
-        "hedge_lots": 5,
-        "fly_lots": 2,
-        "segment": "INDEX",
-    },
-    "BANKNIFTY": {
-        "display_name": "BankNifty",
-        "exchange": "NSE",
-        "lot_size": 15,
-        "strike_interval": 100,
-        "expiry_day": 0,        # Last Wednesday (special handling)
-        "hedge_pct": 0.02,      # 2%
-        "wings_pct": 0.04,      # 4%
-        "fut_lots": 5,
-        "hedge_lots": 5,
-        "fly_lots": 2,
-        "segment": "INDEX",
     },
 }
 
@@ -170,7 +79,7 @@ def get_wing_distance(symbol: str, cmp: float) -> int:
 
 def get_scenario_moves(symbol: str, cmp: float) -> list:
     """
-    Generate percentage-based scenario move levels for the simulator.
+    Generate percentage-based scenario move levels for the dashboard risk view.
     Returns absolute price moves based on: ±4%, ±8%, ±12%, ±20%
     """
     config = get_instrument_config(symbol)
@@ -194,22 +103,3 @@ def get_scenario_moves(symbol: str, cmp: float) -> list:
         moves.append(rounded_move)
     
     return sorted(set(moves))
-
-
-def get_all_instruments() -> list:
-    """
-    Returns list of all supported instruments with metadata for UI.
-    """
-    instruments = []
-    for symbol, config in INSTRUMENT_CALIBRATION.items():
-        instruments.append({
-            "symbol": symbol,
-            "display_name": config["display_name"],
-            "exchange": config["exchange"],
-            "lot_size": config["lot_size"],
-            "strike_interval": config["strike_interval"],
-            "hedge_pct": config["hedge_pct"],
-            "wings_pct": config["wings_pct"],
-            "segment": config["segment"],
-        })
-    return instruments

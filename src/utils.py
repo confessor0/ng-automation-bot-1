@@ -4,16 +4,6 @@ import math
 # Instrument Specs (MCX + NSE)
 SYMBOL_SPECS = {
     "NATGASMINI": {"interval": 5, "lot": 1250, "hedge_offset": 10, "wing_dist": 20, "fly_width": 20, "expiry_day": 24, "exchange": "MCX"},
-    "CRUDEOILM": {"interval": 100, "lot": 10, "hedge_offset": 100, "wing_dist": 200, "fly_width": 200, "expiry_day": 18, "exchange": "MCX"},
-    "SILVERM": {"interval": 250, "lot": 5, "hedge_offset": 500, "wing_dist": 1000, "fly_width": 1000, "expiry_day": 28, "exchange": "MCX"},
-    "GOLDM": {"interval": 100, "lot": 10, "hedge_offset": 200, "wing_dist": 500, "fly_width": 500, "expiry_day": 4, "exchange": "MCX"},
-    "COPPER": {"interval": 5, "lot": 2500, "hedge_offset": 10, "wing_dist": 20, "fly_width": 20, "expiry_day": 28, "exchange": "MCX"},
-    "ZINC": {"interval": 5, "lot": 5000, "hedge_offset": 5, "wing_dist": 10, "fly_width": 10, "expiry_day": 28, "exchange": "MCX"},
-    "ALUMINI": {"interval": 2, "lot": 5000, "hedge_offset": 4, "wing_dist": 8, "fly_width": 8, "expiry_day": 28, "exchange": "MCX"},
-    "LEADMINI": {"interval": 2, "lot": 5000, "hedge_offset": 4, "wing_dist": 8, "fly_width": 8, "expiry_day": 28, "exchange": "MCX"},
-    "NICKEL": {"interval": 50, "lot": 250, "hedge_offset": 50, "wing_dist": 100, "fly_width": 100, "expiry_day": 28, "exchange": "MCX"},
-    "NIFTY": {"interval": 50, "lot": 25, "hedge_offset": 50, "wing_dist": 100, "fly_width": 100, "expiry_day": 0, "exchange": "NSE"},
-    "BANKNIFTY": {"interval": 100, "lot": 15, "hedge_offset": 100, "wing_dist": 200, "fly_width": 200, "expiry_day": 0, "exchange": "NSE"},
 }
 
 def get_month_code(date_obj):

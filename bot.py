@@ -3,7 +3,6 @@ import time
 import threading
 from datetime import datetime
 from colorama import init, Fore, Style
-from src.instrument_manager import InstrumentManager
 from src.state_manager import StateManager
 from src.broker import FyersConnector
 from src.market_data import MarketDataEngine
@@ -32,12 +31,11 @@ init(autoreset=True)
 
 class TradingBot:
     def __init__(self):
-        # [NEW] Auto-Login / Token Validation
-        print(f"{Fore.CYAN}🔐 Validating Session...{Style.RESET_ALL}")
-        TokenManager.get_instance().ensure_valid_token()
-        
+        print(f"{Fore.CYAN}🔐 Checking Fyers session...{Style.RESET_ALL}")
+        token_manager = TokenManager.get_instance()
+        if not token_manager.is_token_valid():
+            print(f"{Fore.YELLOW}⚠️ No valid Fyers session. Connect through browser OAuth in Admin.{Style.RESET_ALL}")
         self.state_mgr = StateManager.get_instance()
-        self.inst_mgr = InstrumentManager.get_instance()
         self.broker = FyersConnector()
         self.engines = {}
         self.running = True
@@ -249,7 +247,7 @@ class TradingBot:
         else:
             print("DEBUG: Web Server Thread Started. Entering Main Loop...")
         
-        token_mgr = TokenManager()
+        token_mgr = TokenManager.get_instance()
         last_token_check = time.time()
         
         while self.running:
@@ -268,6 +266,11 @@ class TradingBot:
                     
                     # Update Broker Connection Status in State (only every 15 mins)
                     is_connected = token_mgr.validate_token()
+                    if is_connected and self.broker.access_token != token_mgr.access_token:
+                        self.broker.access_token = token_mgr.access_token
+                        is_connected = self.broker.connect()
+                        if is_connected:
+                            self.state_mgr.add_log("Fyers broker session connected after browser OAuth.", category="SYSTEM")
                     status_str = "CONNECTED" if is_connected else "DISCONNECTED"
                     
                     health = self.state_mgr.get_state().get("system_health", {})
@@ -278,13 +281,7 @@ class TradingBot:
                              self.state_mgr.add_log("⚠️ Broker Disconnected - Attempting Reconnect...", category="SYSTEM")
                     
                     if token_mgr.is_token_expiring_soon(hours=2):
-                        print(f"{Fore.YELLOW}⚠️ Token expiring soon. Refreshing...{Style.RESET_ALL}")
-                        new_token = token_mgr.ensure_valid_token()
-                        if new_token:
-                             # Re-connect broker with new token
-                             print(f"{Fore.GREEN}🔄 Updating Broker Session with new Token...{Style.RESET_ALL}")
-                             self.broker.access_token = new_token
-                             self.broker.connect()
+                        self.state_mgr.add_log("Fyers session is expired or expiring; reconnect through browser OAuth.", category="SYSTEM")
                 
                 # Check System Status
                 sys_state = self.state_mgr.get_state()

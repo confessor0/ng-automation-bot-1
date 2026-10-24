@@ -4,8 +4,6 @@ Calculates position health metrics for adjustment decisions.
 Without this, Adjustment Engine cannot function.
 """
 
-import json
-import os
 from datetime import datetime
 from src.state_manager import StateManager
 
@@ -18,10 +16,7 @@ class PositionsAnalyzer:
     - Spot distance from strikes
     - Hedge coverage %
     
-    Stores snapshot every candle close for historical analysis.
     """
-    
-    SNAPSHOTS_FILE = "position_snapshots.json"
     
     def __init__(self, broker):
         self.broker = broker
@@ -267,43 +262,3 @@ class PositionsAnalyzer:
             })
         
         return alerts
-    
-    def save_snapshot(self) -> dict:
-        """Save current analysis as a point-in-time snapshot"""
-        analysis = self.state_mgr.get_state().get("positions_analysis", {})
-        
-        if not analysis:
-            return {"success": False, "message": "No analysis to snapshot"}
-        
-        try:
-            snapshots = []
-            if os.path.exists(self.SNAPSHOTS_FILE):
-                with open(self.SNAPSHOTS_FILE, 'r') as f:
-                    snapshots = json.load(f)
-            
-            # Add candle timestamp
-            analysis["candle_time"] = datetime.now().isoformat()
-            snapshots.append(analysis)
-            
-            # Keep last 100 snapshots
-            if len(snapshots) > 100:
-                snapshots = snapshots[-100:]
-            
-            with open(self.SNAPSHOTS_FILE, 'w') as f:
-                json.dump(snapshots, f, indent=2)
-            
-            return {"success": True, "message": "Snapshot saved"}
-        except Exception as e:
-            return {"success": False, "message": str(e)}
-    
-    @staticmethod
-    def get_snapshots(limit: int = 50) -> list:
-        """Retrieve historical snapshots"""
-        try:
-            if not os.path.exists(PositionsAnalyzer.SNAPSHOTS_FILE):
-                return []
-            with open(PositionsAnalyzer.SNAPSHOTS_FILE, 'r') as f:
-                snapshots = json.load(f)
-            return list(reversed(snapshots[-limit:]))
-        except:
-            return []

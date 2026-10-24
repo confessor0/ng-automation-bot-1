@@ -33,22 +33,7 @@ class FyersConnector:
             if self.profile.get("s") == "ok":
                 name = self.profile.get("data", {}).get("name", "Unknown")
                 
-                # Check if autonomous login credentials are configured
-                import os
-                from dotenv import load_dotenv
-                load_dotenv(override=True)
-                has_auto_creds = all([
-                    os.getenv("FYERS_ID"),
-                    os.getenv("FYERS_PIN"),
-                    os.getenv("FYERS_TOTP_KEY")
-                ])
-                
-                if has_auto_creds:
-                    print(f"{Fore.GREEN}✅ FYERS CONNECTED (AUTONOMOUS LOGIN): {name} (ID: {self.client_id}){Style.RESET_ALL}")
-                    print(f"{Fore.CYAN}🔐 All Credentials Configured - Auto-Login Enabled{Style.RESET_ALL}")
-                else:
-                    print(f"{Fore.GREEN}✅ FYERS CONNECTED: {name} (ID: {self.client_id}){Style.RESET_ALL}")
-                
+                print(f"{Fore.GREEN}✅ FYERS CONNECTED: {name} (ID: {self.client_id}){Style.RESET_ALL}")
                 return True
             else:
                 msg = self.profile.get("message", "Unknown Error")

@@ -68,16 +68,15 @@ NG Automation/
 │   ├── broker.py               # Fyers Connector
 │   ├── config.py               # Configuration Constants
 │   ├── database.py             # SQLite Persistence
-│   ├── execution.py            # Trade Execution Logic
-│   ├── instrument_manager.py   # Symbol Resolution
+│   ├── execution.py            # Risk exit and scaling actions
 │   ├── market_data.py          # Data Fetching
 │   ├── order_executor.py       # Sequential Order Processing
 │   ├── order_intent.py         # Intent Lifecycle Management
-│   ├── positions_analyzer.py   # MTM & Greek Analysis
+│   ├── positions_analyzer.py   # Internal risk adjustment analysis
 │   ├── state_manager.py        # Central State Store
 │   ├── strategy.py             # Trend Analysis Logic
 │   ├── strategy_state.py       # Strategy State Machine
-│   ├── token_manager.py        # Token Lifecycle & Auto-Refresh
+│   ├── token_manager.py        # Manual browser OAuth session
 │   └── web_server.py           # Flask API Endpoints
 └── .env                    # Secrets (Excluded from Repo)
 ```
@@ -135,17 +134,16 @@ NG Automation/
 ## 5. API Interface (Web Server)
 
 ### Market Data
-*   `GET /api/refresh`: Triggers on-demand calculation loop (Trend, P&L, Analysis) and returns updated state.
+*   `POST /api/refresh`: Fetches on-demand market data and updates trend and risk context.
 *   `GET /api/state`: Returns raw JSON state.
 
 ### Trading Operations
-*   `POST /api/orders/force-create`: Manually creates a basket (Entry/Exit).
-*   `POST /api/orders/approve`: Approves a pending basket for execution.
-*   `POST /api/orders/cancel`: Cancels a pending intent.
+*   `POST /api/orders/action`: Approves, cancels, or executes a validated order intent.
+*   Order intents are created from Strategy 1 signals; Strategy 2 remains signal-only until legs and quantities are confirmed.
 
 ### Admin
-*   `POST /api/admin/set_mode`: Switch between LIVE / OBSERVER / PANIC modes.
-*   `POST /api/authenticate`: Fyers OAuth flow.
+*   Fyers connection uses browser OAuth at `/api/admin/auth_url` and `/callback`.
+
 
 ---
 
@@ -156,7 +154,7 @@ NG Automation/
     *   **Trend Engine**: Displays CE/PE MA9 status and Final Trend badge.
     *   **Recommended Position Panel**: Shows the "Order Intent" (Basket) waiting for approval.
     *   **Execution Console**: Real-time table of executing orders.
-    *   **Positions Analyzer**: Live MTM, Greeks, and Simulated P&L.
+    *   **Live Positions**: Current positions and MTM. Internal position analysis supports risk adjustments.
 *   **Logic**:
     *   Polls `/api/state` for background updates.
     *   `manualRefreshAll()` triggers `/api/refresh` to run backend logic.

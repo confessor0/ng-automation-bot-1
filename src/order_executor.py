@@ -279,6 +279,16 @@ class OrderExecutor:
         if exec_state.get("basket_id") != basket_id:
             print(f"{Fore.RED}❌ Basket {basket_id} not found{Style.RESET_ALL}")
             return False
+
+        admin_config = self.state_mgr.get_state().get("admin_config", {})
+        if (exec_state.get("basket_type", "ENTRY").upper() == "ENTRY" and
+                admin_config.get("news_risk_enabled", False)):
+            exec_state["status"] = "BLOCKED"
+            exec_state["error_message"] = "New entry blocked by News / Event Risk control"
+            self.state_mgr.update("order_execution_state", exec_state)
+            self.db.upsert_basket(exec_state)
+            self.state_mgr.add_log("⛔ Entry execution blocked by News / Event Risk control", category="RISK")
+            return False
         
         if exec_state.get("status") != "PENDING":
             print(f"{Fore.RED}❌ Basket already executing or completed{Style.RESET_ALL}")

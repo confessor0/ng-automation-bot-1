@@ -12,14 +12,6 @@ services:
         sync: false
       - key: FYERS_ACCESS_TOKEN
         sync: false
-      - key: FYERS_REFRESH_TOKEN
-        sync: false
-      - key: FYERS_PIN
-        sync: false
-      - key: FYERS_TOTP_KEY
-        sync: false
-      - key: FYERS_ID
-        sync: false
       - key: PORT
         value: 5055
       - key: ON_DEMAND_MODE

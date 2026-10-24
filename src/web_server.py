@@ -11,7 +11,6 @@ import threading
 from functools import wraps
 from datetime import datetime
 from src.state_manager import StateManager
-from src.instrument_manager import InstrumentManager
 from colorama import Fore, Style
 import os
 import secrets
@@ -47,7 +46,6 @@ def internal_error(e):
     return redirect(url_for('home'))
 
 state_mgr = StateManager.get_instance()
-instrument_mgr = InstrumentManager.get_instance()
 
 # Authentication Config
 ADMIN_USERNAME = "admin"
@@ -155,20 +153,6 @@ def home():
         import traceback
         return f"<h1>Error Rendering Template</h1><pre>{traceback.format_exc()}</pre>", 500
 
-@app.route('/test')
-def test():
-    """Direct test page - no login required"""
-    return render_template('test.html')
-
-@app.route('/api/instruments')
-def get_instruments():
-    """Returns all supported instruments for UI dropdown."""
-    from src.instrument_config import get_all_instruments
-    return jsonify({
-        "success": True,
-        "instruments": get_all_instruments()
-    })
-
 @app.route('/api/state')
 def get_state():
     import json
@@ -220,10 +204,7 @@ def refresh_market_data():
     Only fetches fresh data from Fyers when user explicitly requests it.
     This saves API quota by not polling continuously.
     
-    Uses ensure_broker_connected() which handles:
-    - Token validation (JWT expiry check)
-    - Automatic token refresh if expired
-    - Headless login if refresh fails
+    Uses a manually authorized Fyers session when the access token is valid.
     """
     import json
     from datetime import datetime
@@ -303,6 +284,19 @@ def refresh_market_data():
                     "pe_ma9": details.get("pe_ma9", 0)
                 }
                 print(f"✅ Trend Engine Updated: {trend}")
+                # Email once when the confirmed trend changes, not on every dashboard refresh.
+                mail_cfg = state_mgr.get_state().get("mailjet_config", {})
+                previous = mail_cfg.get("last_notified_trend")
+                if (mail_cfg.get("enabled") and mail_cfg.get("notify_trends") and
+                        trend in ("BULLISH", "BEARISH") and trend != previous):
+                    from src.notification_service import send_mailjet_notification
+                    sent = send_mailjet_notification(
+                        f"NG trend changed to {trend}",
+                        f"Natural Gas trend: {trend}\\nCE: {trend_data['ce_price']} (MA9 {trend_data['ce_ma9']})\\nPE: {trend_data['pe_price']} (MA9 {trend_data['pe_ma9']})",
+                        mail_cfg.get("recipient"))
+                    if sent:
+                        mail_cfg["last_notified_trend"] = trend
+                        state_mgr.update("mailjet_config", mail_cfg)
                 
                 # [NEW] Helper for Scenario Analysis (now uses instrument config)
                 from src.instrument_config import get_instrument_config, get_hedge_distance, get_wing_distance, get_scenario_moves
@@ -750,58 +744,6 @@ def refresh_market_data():
         return jsonify({"success": False, "error": str(e)})
 
 
-@app.route('/api/profile')
-@login_required
-def get_user_profile():
-    """
-    Fetches User & Risk Profile data.
-    """
-    try:
-        from src.config import MAX_FUTURES_QTY, MAX_ADJUSTMENTS_PER_DAY
-        from src.token_manager import TokenManager
-        import os
-        
-        # Identity (from session, not state — prevents crash)
-        identity = {
-            "login_id": os.getenv("FYERS_ID", "-"),
-            "name": session.get("username", "User"),
-            "role": session.get("role", "viewer"),
-            "session_status": "ACTIVE" if TokenManager.get_instance().is_token_valid() else "INACTIVE",
-            "last_login": "Today"
-        }
-        
-        # Strategy Lock
-        try:
-            strat_state = state_mgr.get_state("NATGASMINI").get("strategy_phase", "IDLE")
-        except Exception:
-            strat_state = "IDLE"
-        lock_status = "LOCKED" if strat_state != "IDLE" else "UNLOCKED"
-        
-        # Security
-        security = {
-            "auth_type": "Authentication System",
-            "email_linked": "Link email..." 
-        }
-        
-        # Risk Limits
-        risk = {
-            "max_futures": MAX_FUTURES_QTY,
-            "max_adjustments": MAX_ADJUSTMENTS_PER_DAY,
-            "status": "WITHIN LIMITS"
-        }
-        
-        return jsonify({
-            "success": True,
-            "identity": identity,
-            "lock": {"status": lock_status, "strategy": "Benchmark Hedge"},
-            "security": security,
-            "risk": risk
-        })
-    except Exception as e:
-        print(f"Error fetching profile: {e}")
-        return jsonify({"success": False, "error": str(e)})
-
-        
 @app.route('/api/live-orders')
 def get_live_orders():
     """
@@ -868,148 +810,33 @@ def get_live_positions():
         print(f"Error fetching positions: {e}")
         return jsonify({"success": False, "positions": [], "error": str(e)})
 
-@app.route('/api/execute_trade', methods=['POST'])
-@login_required
-def execute_trade():
-    """
-    User manually confirms the pending trade for a specific instrument.
-    """
-    print(f"{Fore.GREEN}🔥🔥🔥 /api/execute_trade endpoint HIT! 🔥🔥🔥{Style.RESET_ALL}")
-    
-    data = request.json
-    symbol = data.get('symbol', 'NATGASMINI')
-    
-    print(f"{Fore.CYAN}DEBUG [execute_trade]: symbol={symbol}{Style.RESET_ALL}")
-    
-    inst_state = state_mgr.get_state(symbol)
-    
-    print(f"{Fore.CYAN}DEBUG [execute_trade]: inst_state keys={list(inst_state.keys())}{Style.RESET_ALL}")
-    print(f"{Fore.CYAN}DEBUG [execute_trade]: pending_signal={inst_state.get('pending_signal')}{Style.RESET_ALL}")
-    
-    # Check Emergency Halt
-    emer = state_mgr.get_state().get("emergency_controls", {})
-    if emer.get("is_halted"):
-        return jsonify({"status": "error", "message": "TRADING HALTED BY ADMIN"}), 403
-        
-    if inst_state.get('pending_signal'):
-        print(f"{Fore.GREEN}DEBUG [execute_trade]: Setting trade_approval = True{Style.RESET_ALL}")
-        state_mgr.update("trade_approval", True, symbol=symbol)
-        state_mgr.add_log(f"👨‍💻 USER COMMAND [{symbol}]: Execute Trade Approved.")
-        print(f"{Fore.GREEN}DEBUG [execute_trade]: trade_approval set! Returning success.{Style.RESET_ALL}")
-        return jsonify({"status": "success", "message": f"Execution Queued for {symbol}"})
-    
-    print(f"{Fore.RED}DEBUG [execute_trade]: NO pending_signal found! Returning error.{Style.RESET_ALL}")
-    return jsonify({"status": "error", "message": f"No Pending Signal for {symbol}"}), 400
-
 # ===== ORDER MANAGEMENT API (NEW) =====
 
 # Shared broker instance for read-only data operations
 data_broker = None
 
 def ensure_broker_connected():
-    """
-    Ensures a valid broker connection exists.
-    
-    This is the SINGLE POINT of broker initialization for all data endpoints.
-    It handles:
-    1. Token validation (JWT expiry check, no API call)
-    2. Automatic token refresh if expired
-    3. Headless login if refresh fails
-    4. Broker re-initialization with new token
-    
-    Returns: FyersConnector instance or None if connection failed
-    """
+    """Connect only with a currently valid manually authorized Fyers token."""
     global data_broker
     from src.broker import FyersConnector
     from src.token_manager import TokenManager
-    from dotenv import load_dotenv
-    import os
-    
-    # Get singleton TokenManager
-    token_mgr = TokenManager.get_instance()
-    
-    # Step 1: Check if current token is valid (no API call)
-    if not token_mgr.is_token_valid():
-        print("🔄 Token invalid or expired - refreshing...")
-        
-        # Step 2: Try to get a valid token (refresh or headless login)
-        new_token = token_mgr.ensure_valid_token()
-        
-        if not new_token:
-            print("❌ Failed to obtain valid token")
-            return None
-        
-        # Force reload environment with new token
-        load_dotenv(override=True)
-        
-        # Reset broker to force re-init with new token
+
+    token_manager = TokenManager.get_instance()
+    if not token_manager.is_token_valid():
         data_broker = None
-    
-    # Step 3: Initialize or re-initialize broker
-    current_token = os.getenv("FYERS_ACCESS_TOKEN")
-    
-    if data_broker is None:
-        print("🔌 Initializing broker connection...")
+        return None
+
+    current_token = token_manager.access_token
+    if data_broker is None or getattr(data_broker, "access_token", None) != current_token:
         data_broker = FyersConnector()
         if not data_broker.connect():
-            print("❌ Broker connection failed")
-            return None
-        return data_broker
-    
-    # Step 4: Check if broker needs reconnect (token changed)
-    is_connected = getattr(data_broker, 'fyers', None) is not None
-    token_changed = getattr(data_broker, 'access_token', '') != current_token
-    
-    if not is_connected or token_changed:
-        print(f"🔄 Reconnecting broker (connected={is_connected}, token_changed={token_changed})")
-        data_broker = FyersConnector()
-        if not data_broker.connect():
-            print("❌ Broker reconnection failed")
-            return None
-    
+            data_broker = None
     return data_broker
 
 # Alias for backward compatibility
 def get_data_broker():
     """Backward compatible alias for ensure_broker_connected()"""
     return ensure_broker_connected()
-
-# ===== CONTINUOUS AUTO-LOGIN DAEMON =====
-# Monitors Fyers connection in the background and auto-renews the token silently
-def _background_auto_login_loop():
-    import threading
-    import time
-    from src.token_manager import TokenManager
-    
-    def _loop():
-        # Immediate check on startup
-        try:
-            print("🚀 [STARTUP] Attempting automatic Fyers connection...")
-            broker = ensure_broker_connected()
-            if broker and broker.fyers:
-                print("✅ [STARTUP] Fyers auto-login successful!")
-        except Exception as e:
-            print(f"⚠️ [STARTUP] Auto-login error: {e}")
-            
-        # Continuous monitoring
-        while True:
-            time.sleep(300)  # Check every 5 minutes
-            try:
-                tm = TokenManager.get_instance()
-                # If token is expiring within 2 hours or invalid, trigger the refresh/login
-                if tm.is_token_expiring_soon(hours=2) or not tm.is_token_valid():
-                    print("🔄 [BACKGROUND] Token expiring or invalid, triggering silent auto-login...")
-                    ensure_broker_connected()
-            except Exception as e:
-                print(f"⚠️ [BACKGROUND] Auto-login error: {e}")
-
-    # Run in background thread to not block server
-    t = threading.Thread(target=_loop, daemon=True)
-    t.start()
-
-_background_auto_login_loop()
-
-import time
 
 @app.route('/api/orders/current', methods=['GET'])
 # @login_required  <-- DISABLED to allow Dashboard polling without strict session
@@ -1228,62 +1055,6 @@ def execute_orders():
     state_mgr.add_log(f"🚀 Started Basket Execution: {basket_id}")
     return jsonify({"status": "success", "message": f"Basket execution started: {basket_id}"})
 
-@app.route('/api/orders/force-create', methods=['POST'])
-# @login_required
-def force_create_basket():
-    """
-    Force creates a basket for testing real order flow.
-    This bypasses the trend detection and creates a basket directly.
-    """
-    try:
-        from datetime import datetime
-        from src.order_executor import OrderExecutor
-        from src.broker import FyersConnector
-        from src.state_manager import StateManager
-        
-        state_mgr = StateManager.get_instance()
-        
-        data = request.json or {}
-        direction = data.get('direction', 'BEARISH')  # BULLISH or BEARISH
-        # [FIX] Use live ATM from StateManager to ensure dynamic basket
-        live_atm = state_mgr.get_state().get("atm_strike")
-        atm_strike = live_atm if live_atm else data.get('atm_strike', 310)
-        
-        print(f"DEBUG: force_create_basket using ATM={atm_strike} (Live={live_atm})")
-        expiry = data.get('expiry', '26JAN')
-        symbol = data.get('symbol', 'NATGASMINI')
-        
-        # Check Emergency Halt
-        emer = state_mgr.get_state().get("emergency_controls", {})
-        if emer.get("is_halted"):
-            return jsonify({"status": "error", "message": "TRADING HALTED"}), 403
-        
-        # Connect broker and create executor
-        broker = FyersConnector()
-        broker.connect()
-        executor = OrderExecutor(broker, symbol_base=symbol)
-        
-        # Create the basket
-        basket_id = executor.create_basket(direction, atm_strike, expiry)
-        
-        # Set pending signal for UI
-        state_mgr.update("pending_signal", {
-            "trend": direction,
-            "basket": [],
-            "basket_id": basket_id,
-            "timestamp": datetime.now().strftime("%H:%M:%S")
-        }, symbol=symbol)
-        
-        # Transition workflow state
-        state_mgr.transition_workflow_state("SIGNAL_CONFIRMED", basket_type="ENTRY")
-        state_mgr.transition_workflow_state("BASKET_READY")
-        
-        return jsonify({"status": "success", "message": f"Basket execution started: {basket_id}", "basket_id": basket_id})
-    except Exception as e:
-        import traceback
-        print(traceback.format_exc())
-        return jsonify({"status": "error", "message": str(e), "trace": traceback.format_exc()}), 500
-
 @app.route('/api/orders/history', methods=['GET'])
 @login_required
 def get_order_history():
@@ -1345,66 +1116,6 @@ def reset_basket():
     return jsonify({"status": "success", "message": "Basket reset to PENDING"})
 
 # ===== END ORDER MANAGEMENT API =====
-
-# ===== P&L SIMULATOR API (NEW) =====
-
-@app.route('/api/simulate-scenarios', methods=['GET'])
-@login_required
-def simulate_scenarios():
-    """
-    Runs the Expiry-Aware Dynamic P&L Simulator.
-    Uses live CMP from market data.
-    
-    Query Params:
-        - dte: Days to Expiry (optional, calculated from current expiry if not provided)
-    
-    Returns: Simulation results with leg-wise P&L across scenarios
-    """
-    from src.pnl_simulator import run_simulation
-    from src.utils import get_atm_strike
-    
-    # Get live CMP from state
-    state = state_mgr.get_state()
-    cmp = state.get("market_price", 0)
-    atm_strike = state.get("atm_strike", 0)
-    
-    if cmp == 0:
-        return jsonify({
-            "status": "error",
-            "message": "No market price available. Click 'Refresh Data' first."
-        }), 400
-    
-    # Calculate ATM if not in state
-    if atm_strike == 0:
-        atm_strike = get_atm_strike(cmp, "NATGASMINI")
-    
-    # Get DTE from query or estimate from current date
-    dte = request.args.get('dte', type=int)
-    symbol = request.args.get('symbol', 'NATGASMINI')
-    
-    if dte is None:
-        # Estimate DTE (assume expiry around 25th of month)
-        from datetime import datetime
-        now = datetime.now()
-        day = now.day
-        if day <= 25:
-            dte = 25 - day
-        else:
-            dte = 7  # Default if past expiry
-    
-    try:
-        results = run_simulation(cmp=cmp, atm_strike=atm_strike, dte=dte, symbol=symbol)
-        return jsonify({
-            "status": "success",
-            "simulation": results
-        })
-    except Exception as e:
-        return jsonify({
-            "status": "error",
-            "message": str(e)
-        }), 500
-
-# ===== END P&L SIMULATOR API =====
 
 # ===== STRATEGY ORCHESTRATION APIs (NEW) =====
 
@@ -1545,31 +1256,6 @@ def handle_order_action():
 
     return jsonify({"status": "error", "message": f"Unknown action: {action}"}), 400
 
-@app.route('/api/positions/analysis', methods=['GET'])
-@login_required
-def get_positions_analysis():
-    """Get current position analysis (delta, hedge coverage, etc.)"""
-    from src.positions_analyzer import PositionsAnalyzer
-    
-    broker = get_data_broker()
-    if not broker:
-        return jsonify({"error": "Broker not available"}), 503
-    
-    analyzer = PositionsAnalyzer(broker)
-    symbol_base = request.args.get('symbol', 'NATGASMINI')
-    analysis = analyzer.analyze(symbol_base)
-    
-    return jsonify(analysis)
-
-@app.route('/api/positions/snapshots', methods=['GET'])
-@login_required
-def get_position_snapshots():
-    """Get historical position snapshots"""
-    from src.positions_analyzer import PositionsAnalyzer
-    limit = request.args.get('limit', 50, type=int)
-    snapshots = PositionsAnalyzer.get_snapshots(limit)
-    return jsonify({"snapshots": snapshots})
-
 @app.route('/api/adjustment/check', methods=['POST'])
 @login_required
 def check_adjustments():
@@ -1640,16 +1326,6 @@ def reject_trade():
     state_mgr.add_log(f"🚫 USER COMMAND [{symbol}]: Trade Rejected/Dismissed.")
     return jsonify({"status": "success", "message": f"Signal Cleared for {symbol}"})
 
-@app.route('/api/toggle_autonomous', methods=['POST'])
-@login_required
-def toggle_autonomous():
-    state = state_mgr.get_state()
-    current = state.get("autonomous_mode", False)
-    new_val = not current
-    state_mgr.update("autonomous_mode", new_val)
-    state_mgr.add_log(f"🤖 SYSTEM MODE: {'AUTONOMOUS' if new_val else 'MANUAL CONFIRMATION'}")
-    return jsonify({"status": "success", "autonomous_mode": new_val})
-
 @app.route('/api/clear_cache', methods=['POST'])
 @login_required
 def clear_cache():
@@ -1667,74 +1343,6 @@ def set_multiplier():
     return jsonify({"status": "success", "multiplier": val})
 
 # --- USER MANAGEMENT API ---
-
-@app.route('/api/users/list', methods=['GET'])
-@login_required
-@role_required("ADMIN")
-def list_users():
-    state_mgr = StateManager.get_instance()
-    users = state_mgr.user_manager.get_all_users()
-    # User manager already returns safe user objects
-    return jsonify({"users": users})
-
-@app.route('/api/users/add', methods=['POST'])
-@login_required
-@role_required("ADMIN")
-def add_user():
-    data = request.json
-    state_mgr = StateManager.get_instance()
-    
-    success, msg = state_mgr.user_manager.add_user(
-        data.get("username"),
-        data.get("password"),
-        data.get("name"),
-        data.get("role")
-    )
-    
-    if success:
-        state_mgr.add_log(f"Admin created user: {data.get('username')}", category="ADMIN", user=session.get('username'))
-        return jsonify({"status": "success", "message": msg})
-    else:
-        return jsonify({"status": "error", "message": msg}), 400
-
-@app.route('/api/users/delete', methods=['POST'])
-@login_required
-@role_required("ADMIN")
-def delete_user():
-    data = request.json
-    username_to_delete = data.get("username")
-    
-    if username_to_delete == session.get('username'):
-        return jsonify({"status": "error", "message": "Cannot delete your own account"}), 400
-
-    state_mgr = StateManager.get_instance()
-    success, msg = state_mgr.user_manager.delete_user(username_to_delete)
-
-    if success:
-        state_mgr.add_log(f"Admin deleted user: {username_to_delete}", category="ADMIN", user=session.get('username'))
-        return jsonify({"status": "success", "message": msg})
-    else:
-        return jsonify({"status": "error", "message": msg}), 400
-
-@app.route('/api/users/update_role', methods=['POST'])
-@login_required
-@role_required("ADMIN")
-def update_user_role():
-    data = request.json
-    username = data.get("username")
-    new_role = data.get("role")
-
-    if username == session.get('username'):
-        return jsonify({"status": "error", "message": "Cannot change your own role"}), 400
-    
-    state_mgr = StateManager.get_instance()
-    success, msg = state_mgr.user_manager.update_user_role(username, new_role)
-
-    if success:
-        state_mgr.add_log(f"Admin updated role for {username} to {new_role}", category="ADMIN", user=session.get('username'))
-        return jsonify({"status": "success", "message": msg})
-    else:
-        return jsonify({"status": "error", "message": msg}), 400
 
 @app.route('/api/user/change_password', methods=['POST'])
 @login_required
@@ -1758,97 +1366,6 @@ def change_password():
         return jsonify({"status": "success", "message": "Password updated successfully"})
     else:
         return jsonify({"status": "error", "message": msg}), 400
-
-@app.route('/api/user/update_profile', methods=['POST'])
-@login_required
-def update_profile():
-    data = request.json
-    email = data.get("email")
-    # Add other fields here if needed
-    
-    username = session.get('username')
-    state_mgr = StateManager.get_instance()
-    
-    updates = {}
-    if email is not None:
-        updates["email"] = email
-        
-    if updates:
-        state_mgr.user_manager.update_user(username, updates)
-        
-        # [FIX] Update the UI state immediately
-        prof = state_mgr.get_state().get("user_profile", {})
-        if "identity" in prof and email:
-            prof["identity"]["email"] = email
-            state_mgr.update("user_profile", prof)
-            
-        state_mgr.add_log(f"Profile updated for {username}", category="AUTH", user=username)
-        return jsonify({"status": "success", "message": "Profile updated"})
-    
-    return jsonify({"status": "success", "message": "No changes made"})
-
-# --- HEADLESS LOGIN CONFIGURATION [NEW] ---
-@app.route('/api/admin/save_credentials', methods=['POST'])
-@login_required
-@role_required("ADMIN")
-def save_broker_credentials():
-    data = request.json
-    app_id = data.get("app_id")
-    secret_id = data.get("secret_id")
-    fyers_id = data.get("fyers_id")
-    pin = data.get("pin")
-    totp_key = data.get("totp_key")
-
-    if not all([app_id, secret_id, fyers_id, pin, totp_key]):
-        return jsonify({"status": "error", "message": "All fields are required"}), 400
-
-    from src.token_manager import TokenManager
-    TokenManager.save_headless_credentials(fyers_id, pin, totp_key, app_id, secret_id)
-    
-    state_mgr = StateManager.get_instance()
-    state_mgr.add_log("🔐 Broker Credentials Updated", category="ADMIN", user=session.get('username'))
-    
-    return jsonify({"status": "success", "message": "Credentials Saved Securely"})
-
-@app.route('/api/admin/test_login', methods=['POST'])
-@login_required
-@role_required("ADMIN")
-def test_headless_login():
-    from src.token_manager import TokenManager
-    result = TokenManager.perform_headless_login()
-    
-    if result["success"]:
-        return jsonify({"status": "success", "message": "Login Successful! Token Generated."})
-    else:
-        return jsonify({"status": "error", "message": f"Login Failed: {result['message']}"}), 400
-
-@app.route('/api/admin/credential_status', methods=['GET'])
-@login_required
-@role_required("ADMIN")
-def get_credential_status():
-    """Check if all autonomous login credentials are configured"""
-    import os
-    from dotenv import load_dotenv
-    load_dotenv(override=True)
-    
-    creds = {
-        "fyers_id": bool(os.getenv("FYERS_ID")),
-        "pin": bool(os.getenv("FYERS_PIN")),
-        "totp_key": bool(os.getenv("FYERS_TOTP_KEY")),
-        "app_id": bool(os.getenv("FYERS_APP_ID")),
-        "secret_id": bool(os.getenv("FYERS_SECRET_ID"))
-    }
-    
-    all_configured = all(creds.values())
-    is_logged_in = bool(os.getenv("FYERS_ACCESS_TOKEN"))
-    
-    return jsonify({
-        "status": "success",
-        "all_configured": all_configured,
-        "is_logged_in": is_logged_in,
-        "credentials": creds,
-        "message": "✅ All Credentials Configured - Auto-Login Enabled" if all_configured else "⚠️ Some Credentials Missing"
-    })
 
 @app.route('/api/admin/export_logs', methods=['GET'])
 @login_required
@@ -1945,7 +1462,7 @@ def admin_emergency():
 @role_required("ADMIN")
 def get_auth_url():
     from src.token_manager import TokenManager
-    tm = TokenManager()
+    tm = TokenManager.get_instance()
     url = tm.get_login_url()
     if url:
         return jsonify({"status": "success", "url": url})
@@ -1958,7 +1475,7 @@ def fyers_callback():
         return "Error: No Auth Code received", 400
         
     from src.token_manager import TokenManager
-    tm = TokenManager()
+    tm = TokenManager.get_instance()
     res = tm.generate_token_from_code(auth_code)
     
     if res["success"]:
@@ -1980,87 +1497,66 @@ def fyers_callback():
         </div>
         """, 400
 
-@app.route('/api/admin/set_mode', methods=['POST'])
+@app.route('/api/admin/mailjet', methods=['GET', 'POST'])
 @login_required
 @role_required("ADMIN")
-def admin_set_mode():
-    data = request.json
-    mode = data.get("mode")
-    state_mgr = StateManager.get_instance()
-    
-    sys_health = state_mgr.get_state().get("system_health", {}).copy()
-    sys_health["mode"] = mode
-    state_mgr.update("system_health", sys_health)
-    
-    state_mgr.add_log(f"🛡️ SYSTEM MODE CHANGED TO: {mode}", category="ADMIN", user=session.get('username'))
-    state_mgr.add_alert("WARNING", "ADMIN", f"System Mode changed to {mode} by {session.get('username')}")
-    
-    return jsonify({"status": "success", "mode": mode})
-
-@app.route('/api/admin/update_telegram', methods=['POST'])
-@login_required
-@role_required("ADMIN")
-def admin_update_telegram():
-    data = request.json
-    bot_token = data.get("bot_token")
-    chat_id = data.get("chat_id")
-    
-    state_mgr = StateManager.get_instance()
-    
-    # Update State (for UI sync)
-    tele_config = state_mgr.get_state().get("telegram_config", {}).copy()
-    tele_config["bot_token"] = bot_token
-    tele_config["chat_id"] = chat_id
-    state_mgr.update("telegram_config", tele_config)
-    
-    # Update Config in Runtime (Optional if we want immediate effect without restart)
+def admin_mailjet():
     import src.config as config
-    config.TELEGRAM_BOT_TOKEN = bot_token
-    config.TELEGRAM_CHAT_ID = chat_id
-    
-    state_mgr.add_log("📲 Telegram Credentials Updated via Admin Panel", category="ADMIN", user=session.get('username'))
-    return jsonify({"status": "success", "message": "Telegram Credentials Saved!"})
+    import json
+    import os
+    cfg = state_mgr.get_state().get("mailjet_config", {})
+    if request.method == 'GET':
+        return jsonify({"enabled": cfg.get("enabled", False),
+                        "notify_trends": cfg.get("notify_trends", True),
+                        "recipient": cfg.get("recipient", ""),
+                        "from_email": config.MAILJET_FROM_EMAIL or "",
+                        "configured": bool(config.MAILJET_API_KEY and config.MAILJET_SECRET_KEY and config.MAILJET_FROM_EMAIL),
+                        "api_key_set": bool(config.MAILJET_API_KEY),
+                        "secret_key_set": bool(config.MAILJET_SECRET_KEY)})
+    data = request.get_json(silent=True) or {}
+    recipient = str(data.get("recipient", "")).strip()
+    if recipient and ("@" not in recipient or len(recipient) > 254):
+        return jsonify({"status": "error", "message": "Enter a valid notification email."}), 400
+    cfg.update({"enabled": bool(data.get("enabled")),
+                "notify_trends": bool(data.get("notify_trends")),
+                "recipient": recipient})
+    state_mgr.update("mailjet_config", cfg)
+    saved = {"api_key": config.MAILJET_API_KEY, "secret_key": config.MAILJET_SECRET_KEY,
+             "from_email": config.MAILJET_FROM_EMAIL}
+    for field, env_name in (("api_key", "MAILJET_API_KEY"), ("secret_key", "MAILJET_SECRET_KEY"), ("from_email", "MAILJET_FROM_EMAIL")):
+        value = str(data.get(field, "")).strip()
+        if value:
+            setattr(config, env_name, value)
+            saved[{"MAILJET_API_KEY":"api_key", "MAILJET_SECRET_KEY":"secret_key", "MAILJET_FROM_EMAIL":"from_email"}[env_name]] = value
+    try:
+        with open(os.path.join(os.getcwd(), "mailjet_config.json"), "w", encoding="utf-8") as settings_file:
+            json.dump(saved, settings_file)
+    except OSError:
+        return jsonify({"status": "error", "message": "Could not save Mailjet credentials on this server."}), 500
+    state_mgr.add_log("Mailjet notification settings updated", category="ADMIN", user=session.get('username'))
+    return jsonify({"status": "success", "message": "Mailjet notification settings saved."})
 
-@app.route('/api/admin/test_telegram', methods=['POST'])
+@app.route('/api/admin/mailjet/test', methods=['POST'])
 @login_required
 @role_required("ADMIN")
-def admin_test_telegram():
-    from src.notification_service import send_telegram_alert
-    from datetime import datetime
-    
-    try:
-        user = session.get('username')
-        send_telegram_alert(f"🔔 TEST ALERT from Admin Panel\n\nTriggered by: {user}\nTime: {datetime.now().strftime('%H:%M:%S')}")
-        return jsonify({"status": "success", "message": "Test Alert Sent!"})
-    except Exception as e:
-         return jsonify({"status": "error", "message": str(e)})
+def admin_mailjet_test():
+    cfg = state_mgr.get_state().get("mailjet_config", {})
+    from src.notification_service import send_mailjet_notification
+    if send_mailjet_notification("NG Bot Mailjet test", "Mailjet notifications are configured.", cfg.get("recipient")):
+        return jsonify({"status": "success", "message": "Test email sent."})
+    return jsonify({"status": "error", "message": "Test email failed. Check Mailjet credentials, sender verification, and recipient."}), 400
 
 @app.route('/api/admin/logout_fyers', methods=['POST'])
 @login_required
 @role_required("ADMIN")
 def admin_logout_fyers():
-    from dotenv import unset_key
-    import os
-    
     try:
-        # 1. Clear variables from .env
-        env_path = os.path.join(os.getcwd(), '.env')
-        unset_key(env_path, "FYERS_ACCESS_TOKEN")
-        unset_key(env_path, "FYERS_REFRESH_TOKEN")
-        
-        # 2. Clear from environment
-        if "FYERS_ACCESS_TOKEN" in os.environ:
-            del os.environ["FYERS_ACCESS_TOKEN"]
-        if "FYERS_REFRESH_TOKEN" in os.environ:
-            del os.environ["FYERS_REFRESH_TOKEN"]
-            
-        # 3. Log
-        state_mgr = StateManager.get_instance()
-        state_mgr.add_log("🛑 Fyers Tokens Cleared (Manual Logout)", category="ADMIN", user=session.get('username'))
-        
+        from src.token_manager import TokenManager
+        TokenManager.get_instance().clear_tokens()
+        state_mgr.add_log("Fyers tokens cleared by manual logout", category="ADMIN", user=session.get('username'))
         return jsonify({"status": "success", "message": "Logged out from Fyers. Tokens cleared."})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+    except Exception as exc:
+        return jsonify({"status": "error", "message": str(exc)}), 500
 
 @app.route('/api/audit/logs', methods=['GET'])
 @login_required

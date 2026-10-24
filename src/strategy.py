@@ -16,6 +16,12 @@ class StrategyEngine:
         self.ma_period = 9  # [NEW] Default 9 MA
         
     def analyze_trend(self, fut_symbol, expiry):
+        active_strategy = self.state_manager.get_state().get("admin_config", {}).get("active_strategy", "STRATEGY_1")
+        if active_strategy == "STRATEGY_2":
+            return self._analyze_strategy_2_completed_cross(fut_symbol, expiry)
+        return self._analyze_strategy_1(fut_symbol, expiry)
+
+    def _analyze_strategy_1(self, fut_symbol, expiry):
         """
         Analyzes trend based on ATM Options vs MA9.
         ENHANCED: Uses real-time LTP as primary source, history as backup.
@@ -128,6 +134,81 @@ class StrategyEngine:
         self.state_manager.update("ng_trend_engine", engine_state)
         
         return trend, atm_strike, details
+
+    def _analyze_strategy_2_completed_cross(self, fut_symbol, expiry):
+        """Evaluate paired CE/PE MA9 crosses from the latest completed daily candles."""
+        from src.config import TIMEZONE, is_market_open
+
+        if not getattr(self.broker, "fyers", None):
+            return "NEUTRAL", 0, {"signal_rule": "STRATEGY_2", "signal_status": "WAITING_FOR_REAL_CANDLES"}
+
+        fut_price = self.market_data._get_ltp(fut_symbol)
+        if not fut_price:
+            return "NEUTRAL", 0, {"signal_rule": "STRATEGY_2", "signal_status": "FUTURES_QUOTE_MISSING"}
+        base = self.market_data.symbol_base
+        atm = get_atm_strike(fut_price, base)
+        ce_symbol = construct_symbol(base, "OPT", expiry, atm, "CE")
+        pe_symbol = construct_symbol(base, "OPT", expiry, atm, "PE")
+
+        def completed_daily(symbol):
+            frame = self._fetch_history(symbol).copy()
+            if frame.empty or len(frame) < self.ma_period + 1:
+                return frame
+            # The current daily candle is incomplete until the configured session closes.
+            if is_market_open() and "epoch" in frame.columns:
+                today = datetime.now(TIMEZONE).date()
+                local_dates = frame["epoch"].map(lambda stamp: datetime.fromtimestamp(float(stamp), TIMEZONE).date())
+                frame = frame.loc[local_dates < today]
+            return frame.reset_index(drop=True)
+
+        ce_hist = completed_daily(ce_symbol)
+        pe_hist = completed_daily(pe_symbol)
+        if len(ce_hist) < self.ma_period + 1 or len(pe_hist) < self.ma_period + 1:
+            return "NEUTRAL", atm, {"signal_rule": "STRATEGY_2", "signal_status": "WAITING_FOR_10_COMPLETED_DAILY_CANDLES"}
+
+        def cross_values(frame):
+            closes = frame["close"].astype(float)
+            averages = closes.rolling(window=self.ma_period).mean()
+            return float(closes.iloc[-2]), float(averages.iloc[-2]), float(closes.iloc[-1]), float(averages.iloc[-1])
+
+        ce_prev, ce_prev_ma, ce_close, ce_ma = cross_values(ce_hist)
+        pe_prev, pe_prev_ma, pe_close, pe_ma = cross_values(pe_hist)
+        pe_crossed_below = pe_prev >= pe_prev_ma and pe_close < pe_ma
+        pe_crossed_above = pe_prev <= pe_prev_ma and pe_close > pe_ma
+        ce_crossed_below = ce_prev >= ce_prev_ma and ce_close < ce_ma
+        ce_crossed_above = ce_prev <= ce_prev_ma and ce_close > ce_ma
+        both_below = ce_close < ce_ma and pe_close < pe_ma
+
+        if pe_crossed_below and ce_crossed_above:
+            trend, status = "BULLISH", "PAIRED_BULLISH_CROSS"
+        elif ce_crossed_below and pe_crossed_above:
+            trend, status = "BEARISH", "PAIRED_BEARISH_CROSS"
+        elif both_below:
+            trend, status = "NEUTRAL", "BOTH_OPTIONS_BELOW_MA9"
+        else:
+            trend, status = "NEUTRAL", "NO_PAIRED_CROSS"
+
+        details = {
+            "signal_rule": "STRATEGY_2", "signal_status": status,
+            "ce_symbol": ce_symbol, "ce_close": round(ce_close, 2), "ce_ma9": round(ce_ma, 2),
+            "pe_symbol": pe_symbol, "pe_close": round(pe_close, 2), "pe_ma9": round(pe_ma, 2),
+            "ce_crossed_below": ce_crossed_below, "ce_crossed_above": ce_crossed_above,
+            "pe_crossed_below": pe_crossed_below, "pe_crossed_above": pe_crossed_above,
+            "both_below_ma9": both_below,
+            "completed_candle_epoch": int(ce_hist["epoch"].iloc[-1]) if "epoch" in ce_hist.columns else None
+        }
+        self.state_manager.update("trend", trend)
+        self.state_manager.update("ng_strategy_state", {
+            **self.state_manager.get_state().get("ng_strategy_state", {}),
+            "trend_bias": trend, "signal_source": status,
+            "engine_heartbeat": datetime.now().timestamp()
+        })
+        self.state_manager.update("ng_trend_engine", {
+            "ce_leg": {"symbol": ce_symbol, "price": round(ce_close, 2), "ma9": round(ce_ma, 2), "status": "BELOW" if ce_close < ce_ma else "ABOVE"},
+            "pe_leg": {"symbol": pe_symbol, "price": round(pe_close, 2), "ma9": round(pe_ma, 2), "status": "BELOW" if pe_close < pe_ma else "ABOVE"},
+            "signal_source": status, "confirmation_time": str(details["completed_candle_epoch"] or "-")
+        })
+        return trend, atm, details
     def check_data_feed_health(self):
         """
         [NEW] Checks if data feed is fresh. Returns True if OK, False if Stale/Error.
@@ -185,9 +266,9 @@ class StrategyEngine:
                 # print(f"📚 History Cache Hit for {symbol}")
                 return df
                 
-        # Simulation Mode for Demo if Fyers is Offline
-        if not self.broker.fyers or self.broker.fyers is None:
-            return self._generate_mock_history()
+        # No synthetic candles: a disconnected broker must not create a trading signal.
+        if not self.broker.fyers:
+            return pd.DataFrame()
 
         # Fyers History API parameters
         today = datetime.now().date()
@@ -229,20 +310,6 @@ class StrategyEngine:
         if len(df) < period:
             return 0.0
         return df['close'].rolling(window=period).mean().iloc[-1]
-
-    def _generate_mock_history(self):
-        """
-        Generates fake history for demo purposes.
-        """
-        import numpy as np
-        dates = pd.date_range(end=datetime.now(), periods=20)
-        # Create a trend scenario: decreasing prices for Put (Bullish arg?)
-        # Let's simulate a Bullish setup: PE prices dropping below MA.
-        # So PE closes should be low.
-        data = {
-            "close": np.linspace(30, 10, 20) + np.random.normal(0, 1, 20)
-        }
-        return pd.DataFrame(data, index=dates)
 
     def check_risk_adjustment(self, current_trend, expiry):
         """
@@ -361,14 +428,9 @@ class StrategyEngine:
                          else:
                              msg = f"⚠️ ADJUSTMENT ALERT: {symbol} sustained below MA9."
 
-                         # 3. Send Alert
-                         from src.notification_service import send_telegram_alert
-                         send_telegram_alert(msg)
-                         
-                         # 4. Update State
+                         # Record the critical alert for the dashboard and audit trail.
                          context["last_alert_date"] = today_str
                          state_mgr.update("adjustment_context", context)
-                         state_mgr.add_log(f"📲 Telegram Alert Sent for {symbol}")
 
                      state_mgr.add_alert("CRITICAL", "SCALING", f"Scale Down Triggered: {sustain_limit}h Sustain Complete on {symbol}")
                      return True, "TRIGGERED"

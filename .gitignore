@@ -4,6 +4,9 @@ __pycache__/
 .venv/
 venv/
 *.pyc
+.env
+mailjet_config.json
+news_risk_settings.json
 .DS_Store
 
 # Fyers

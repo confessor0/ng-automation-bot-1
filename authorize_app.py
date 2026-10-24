@@ -62,7 +62,7 @@ if auth_code:
         print("=" * 60)
         print("✅ SUCCESS! Tokens saved to .env")
         print("=" * 60)
-        print("You can now run the bot. The headless login should work from now on.")
+        print("You can now run the bot. Browser OAuth is configured for the application.")
     else:
         print()
         print(f"❌ Token Generation Failed: {response}")

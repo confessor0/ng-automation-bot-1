@@ -6,7 +6,7 @@ import uuid
 
 # [NEW] Role Definitions
 ROLES = {
-    "ADMIN": ["VIEW_DASHBOARD", "EXECUTE_BENCHMARK", "MANUAL_SCALE", "EMERGENCY_ACTION", "MANAGE_USERS", "CHANGE_LIMITS", "OVERRIDE_SIGNAL"],
+    "ADMIN": ["VIEW_DASHBOARD", "EXECUTE_BENCHMARK", "MANUAL_SCALE", "EMERGENCY_ACTION", "CHANGE_LIMITS", "OVERRIDE_SIGNAL"],
     "RISK_MANAGER": ["VIEW_DASHBOARD", "EMERGENCY_ACTION"],
     "OPERATOR": ["VIEW_DASHBOARD", "EXECUTE_BENCHMARK"],
     "VIEWER": ["VIEW_DASHBOARD"]
@@ -90,51 +90,6 @@ class UserManager:
         username = self.sessions.get(token)
         return self.users.get(username)
 
-    def add_user(self, username, password, name, role, email=""):
-        if username in self.users:
-            return False, "User already exists"
-        if role not in ROLES:
-            return False, "Invalid Role"
-        
-        self.users[username] = {
-            "id": f"u_{len(self.users)+1}",
-            "password": password,
-            "name": name,
-            "role": role,
-            "email": email,
-            "active": True,
-            "last_login": None
-        }
-        self.save_users()
-        return True, "User created"
-
-    def update_user(self, username, updates):
-        if username not in self.users:
-            return False
-        self.users[username].update(updates)
-        self.save_users()
-        return True
-
-    def delete_user(self, username):
-        if username not in self.users:
-            return False, "User not found"
-        if username == "admin":
-            return False, "Cannot delete root admin"
-        
-        del self.users[username]
-        self.save_users()
-        return True, "User deleted"
-
-    def update_user_role(self, username, new_role):
-        if username not in self.users:
-            return False, "User not found"
-        if new_role not in ROLES:
-            return False, "Invalid Role"
-        
-        self.users[username]["role"] = new_role
-        self.save_users()
-        return True, "Role updated"
-
     def change_password(self, username, new_password):
         if username not in self.users:
             return False, "User not found"
@@ -144,16 +99,6 @@ class UserManager:
         self.users[username]["password"] = new_password
         self.save_users()
         return True, "Password updated"
-
-    def get_all_users(self):
-        # Return safe copy without passwords
-        safe_list = []
-        for u in self.users.values():
-            safe_u = u.copy()
-            # del safe_u["password"] # Be careful deleting refs, creating copy above
-            if "password" in safe_u: del safe_u["password"]
-            safe_list.append(safe_u)
-        return safe_list
 
 class StateManager:
     _instance = None
@@ -273,7 +218,9 @@ class StateManager:
                 "observation_period_days": 2,
                 "max_drawdown_pct": 2.0,       # Deprecated, use max_daily_loss_pct
                 "max_daily_loss_pct": 1.5,     # [NEW] Strict Capital Protection Limit
-                "risk_lock_enabled": True
+                "risk_lock_enabled": True,
+                "news_risk_enabled": False,
+                "active_strategy": "STRATEGY_1"
             },
             "system_health": {
                 "mode": "LIVE", # LIVE / PAPER / MAINTENANCE
@@ -349,15 +296,30 @@ class StateManager:
             "basket_data": [], 
             "pending_signal": None, 
             "trade_approval": False, 
-            "autonomous_mode": False, 
             "setup_multiplier": 1 
         }
+
+        # Persist the manual event-risk interlock across process restarts.
+        self.news_risk_settings_file = os.path.join(os.getcwd(), "news_risk_settings.json")
+        try:
+            with open(self.news_risk_settings_file, "r", encoding="utf-8") as settings_file:
+                saved_settings = json.load(settings_file)
+            self.state["admin_config"]["news_risk_enabled"] = bool(saved_settings.get("enabled", False))
+        except (OSError, ValueError, TypeError):
+            pass
 
     def update(self, key, value, symbol=None):
         with self.lock:
             # Update root state
             self.state[key] = value
             self.state["last_update"] = datetime.now().strftime("%H:%M:%S")
+
+            if key == "admin_config" and isinstance(value, dict):
+                try:
+                    with open(self.news_risk_settings_file, "w", encoding="utf-8") as settings_file:
+                        json.dump({"enabled": bool(value.get("news_risk_enabled", False))}, settings_file)
+                except OSError as exc:
+                    print(f"Could not persist News / Event Risk setting: {exc}")
             
             # Maintain instrument-specific entry for backward compatibility
             if symbol:
