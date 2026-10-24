@@ -15,6 +15,7 @@ load_dotenv()
 # ============================================================================
 FYERS_APP_ID = os.getenv("FYERS_APP_ID")
 FYERS_SECRET_ID = os.getenv("FYERS_SECRET_ID")
+FYERS_ID = os.getenv("FYERS_ID")
 FYERS_ACCESS_TOKEN = os.getenv("FYERS_ACCESS_TOKEN")
 FYERS_REDIRECT_URI = os.getenv("FYERS_REDIRECT_URI", "http://127.0.0.1:5000/callback")
 

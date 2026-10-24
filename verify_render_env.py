@@ -5,18 +5,20 @@ def verify_env():
     print("="*50)
     print("🔍 RENDER ENVIRONMENT DIAGNOSTICS")
     print("="*50)
-    
+
     env_vars = [
-        "FYERS_APP_ID", 
+        "FYERS_ID",
+        "FYERS_PIN",
+        "FYERS_TOTP_KEY",
+        "FYERS_APP_ID",
         "FYERS_SECRET_ID",
-        "FYERS_ACCESS_TOKEN",
         "FYERS_REDIRECT_URI",
         "PORT"
     ]
-    
+
     missing = []
     found = 0
-    
+
     for var in env_vars:
         val = os.environ.get(var)
         if val:
@@ -27,7 +29,7 @@ def verify_env():
         else:
             print(f"❌ {var}: NOT FOUND")
             missing.append(var)
-            
+
     print("="*50)
     if missing:
         print(f"⚠️  MISSING {len(missing)} VARIABLES")
@@ -36,7 +38,7 @@ def verify_env():
             print(f"  - {m}")
     else:
         print("🎉 ALL CORE VARIABLES FOUND!")
-        
+
     print("="*50)
     print(f"Current Directory: {os.getcwd()}")
     print(f"Filesystem Writable (test): ", end="")

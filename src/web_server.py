@@ -60,13 +60,13 @@ def role_required(min_role):
         def decorated_function(*args, **kwargs):
             if "user_token" not in session:
                 return jsonify({"status": "error", "message": "Login Required"}), 401
-            
+
             state_mgr = StateManager.get_instance()
             user = state_mgr.user_manager.get_user_by_token(session["user_token"])
-            
+
             if not user:
                 return jsonify({"status": "error", "message": "Invalid Session"}), 401
-            
+
             # Check permissions
             allowed_actions = ROLES.get(user["role"], [])
             # Map simplified role check for now (Admin has all access)
@@ -96,16 +96,16 @@ def login():
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
-        
+
         state_mgr = StateManager.get_instance()
         token, user = state_mgr.user_manager.authenticate(username, password)
-        
+
         if token:
             session['user_token'] = token
             session['username'] = username
             session['role'] = user['role']
             state_mgr.add_log(f"Login Successful: {username}", category="AUTH", user=username)
-            
+
             # Map RBAC Roles to UI Permission flags
             role_perms = ROLES.get(user["role"], [])
             ui_permissions = {
@@ -128,11 +128,11 @@ def login():
             })
             prof["permissions"] = ui_permissions # [NEW] Sync permissions
             state_mgr.update("user_profile", prof)
-            
+
             return redirect(url_for('home'))
         else:
             return render_template('login.html', error="Invalid Credentials")
-            
+
     return render_template('login.html')
 
 @app.route('/logout')
@@ -158,7 +158,7 @@ def get_state():
     import json
     import time as time_module
     state = state_mgr.get_state()
-    
+
     # [FIX] Fast broker connection check using JWT decode (no API call)
     # This ensures UI shows accurate status without slowing down requests
     try:
@@ -166,16 +166,16 @@ def get_state():
         import os
         from dotenv import load_dotenv
         load_dotenv(override=True)
-        
+
         access_token = os.getenv("FYERS_ACCESS_TOKEN")
-        
+
         if access_token:
             try:
                 # Decode JWT to check expiry (fast, no network call)
                 payload = jwt.decode(access_token, options={"verify_signature": False})
                 exp_timestamp = payload.get("exp", 0)
                 remaining_hours = (exp_timestamp - time_module.time()) / 3600
-                
+
                 if remaining_hours > 1:
                     broker_status = "CONNECTED"
                 elif remaining_hours > 0:
@@ -186,14 +186,14 @@ def get_state():
                 broker_status = "DISCONNECTED"
         else:
             broker_status = "DISCONNECTED"
-        
+
         # Update state with real-time status
         if "system_health" not in state:
             state["system_health"] = {}
         state["system_health"]["broker_connection"] = broker_status
     except Exception as e:
         print(f"⚠️ Error checking broker status: {e}")
-    
+
     # Convert to JSON-safe format
     return json.dumps(state, default=str), 200, {'Content-Type': 'application/json'}
 
@@ -203,7 +203,7 @@ def refresh_market_data():
     On-demand refresh endpoint.
     Only fetches fresh data from Fyers when user explicitly requests it.
     This saves API quota by not polling continuously.
-    
+
     Uses a manually authorized Fyers session when the access token is valid.
     """
     import json
@@ -212,7 +212,7 @@ def refresh_market_data():
     from src.utils import get_next_expiry_symbol_suffix, get_atm_strike, construct_symbol
     from src.market_data import MarketDataEngine
     from src.strategy import StrategyEngine
-    
+
     symbol = "NATGASMINI"
     try:
         # Check JSON body first (frontend sends via POST body), then query params
@@ -222,34 +222,34 @@ def refresh_market_data():
             symbol = request.args.get('symbol')
     except Exception:
         pass
-    
+
     print(f"🔄 Refresh requested for instrument: {symbol}")
-        
+
     expiry = get_next_expiry_symbol_suffix(symbol=symbol)
     fut_symbol = construct_symbol(symbol, "FUT", expiry)
-    
+
     try:
         # Get broker instance - this handles all token refresh automatically
         broker = ensure_broker_connected()
-        
+
         if not broker or not broker.fyers:
             return jsonify({"success": False, "error": "Failed to connect to Fyers - check Admin Panel for login status"})
-        
+
         # Throttle before API call
         throttle("refresh_ltp")
-        
+
         # [OPTIMIZED] Use MarketDataEngine with caching to prevent redundant API calls
         market_data = MarketDataEngine(broker, symbol_base=symbol)
         ltp = market_data._get_ltp(fut_symbol)
-        
+
         if ltp > 0:
             atm_strike = get_atm_strike(ltp, symbol)
-            
+
             # Update state
             state_mgr.update("market_price", ltp, symbol=symbol)
             state_mgr.update("atm_strike", atm_strike, symbol=symbol)
             state_mgr.update("expiry", expiry, symbol=symbol)
-            
+
             # Get funds too
             throttle("refresh_funds")
             funds_data = {}
@@ -263,19 +263,19 @@ def refresh_market_data():
                         capital = f.get("equityAmount", 0) or f.get("commodityAmount", 0)
                     elif "Utilized" in title:
                         used = f.get("equityAmount", 0) or f.get("commodityAmount", 0)
-                
+
                 funds_data = {"capital": capital, "used": used, "available": capital - used}
                 state_mgr.update("funds", funds_data, symbol=symbol)
-            
+
             # === NEW: Calculate Trend Engine Data ===
             trend_data = {}
             try:
                 # Reuse market_data instance used for LTP (has cache populated)
                 strategy = StrategyEngine(broker, market_data)
-                
+
                 # Analyze trend - this populates ng_trend_engine in state
                 trend, _, details = strategy.analyze_trend(fut_symbol, expiry)
-                
+
                 trend_data = {
                     "trend": trend,
                     "ce_price": details.get("ce_close", 0),
@@ -297,30 +297,30 @@ def refresh_market_data():
                     if sent:
                         mail_cfg["last_notified_trend"] = trend
                         state_mgr.update("mailjet_config", mail_cfg)
-                
+
                 # [NEW] Helper for Scenario Analysis (now uses instrument config)
                 from src.instrument_config import get_instrument_config, get_hedge_distance, get_wing_distance, get_scenario_moves
                 inst_config = get_instrument_config(symbol)
-                
+
                 def calculate_scenario_pnl(trend, ltp, atm_strike):
                     """Simulates P&L for market moves based on instrument-specific percentages."""
                     scenarios = []
                     scenario_moves = get_scenario_moves(symbol, ltp)
-                    
+
                     # Position Params from instrument config
                     lot_sz = inst_config["lot_size"]
                     fut_q = inst_config["fut_lots"]
                     hedge_q = inst_config["hedge_lots"]
                     fly_q = inst_config["fly_lots"]
-                    
+
                     # Dynamic distances
                     h_dist = get_hedge_distance(symbol, ltp)
                     w_dist = get_wing_distance(symbol, ltp)
-                    
+
                     # Entry Estimates
                     entry_price = ltp
                     hedge_premium = ltp * 0.02  # Approx cost for ITM hedge (~2% of CMP)
-                    
+
                     # Iron Fly Payoff Function (Heuristic)
                     def get_fly_pnl(target, center):
                         dist = abs(target - center)
@@ -331,13 +331,13 @@ def refresh_market_data():
 
                     for move in scenario_moves:
                         target_price = ltp + move
-                        
+
                         # 1. Futures P&L
                         if trend == "BULLISH":
                             fut_pnl = (target_price - entry_price) * fut_q * lot_sz
                         else: # BEARISH
                             fut_pnl = (entry_price - target_price) * fut_q * lot_sz
-                            
+
                         # 2. Hedge P&L (Intrinsic value at target - Premium)
                         hedge_pnl = 0
                         if trend == "BULLISH":
@@ -348,12 +348,12 @@ def refresh_market_data():
                             strike = atm_strike - h_dist  # Long Call
                             intrinsic = max(0, target_price - strike)
                             hedge_pnl = (intrinsic - hedge_premium) * hedge_q * lot_sz
-                            
+
                         # 3. Iron Fly P&L
                         fly_pnl = get_fly_pnl(target_price, atm_strike)
-                        
+
                         total_pnl = fut_pnl + hedge_pnl + fly_pnl
-                        
+
                         scenarios.append({
                             "move": move,
                             "target_price": round(target_price, 2),
@@ -364,20 +364,20 @@ def refresh_market_data():
 
                 # [NEW] Build Recommended Position Basket based on fresh trend and LTP
                 rec_position = None
-                
+
                 # P&L Estimation Parameters from instrument config
                 lot_size = inst_config["lot_size"]
                 fut_qty = inst_config["fut_lots"]
                 hedge_qty = inst_config["hedge_lots"]
                 fly_qty = inst_config["fly_lots"]
-                
+
                 # Dynamic distances based on CMP × percentage
                 hedge_dist = get_hedge_distance(symbol, ltp)
                 wing_dist = get_wing_distance(symbol, ltp)
-                
+
                 if trend in ["BULLISH", "BEARISH"]:
                     from src.utils import construct_symbol
-                    
+
                     # 1. Define Leg Specs (Role, Instrument, Action, Strike, Qty)
                     legs_specs = []
                     if trend == "BULLISH":
@@ -389,7 +389,7 @@ def refresh_market_data():
                             {"role": "Iron Fly Wing", "type": "OPT", "strike": atm_strike + wing_dist, "opt_type": "CE", "action": "BUY", "qty": fly_qty},
                             {"role": "Iron Fly Wing", "type": "OPT", "strike": atm_strike - wing_dist, "opt_type": "PE", "action": "BUY", "qty": fly_qty}
                         ]
-                        
+
                         # Strategy Details for UI
                         primary_action = "BUY FUTURES"
                         primary_detail = f"Go LONG on {inst_config['display_name']} Futures at ₹{ltp:.2f}"
@@ -397,7 +397,7 @@ def refresh_market_data():
                         hedge_detail = f"Buy ITM Put at strike {atm_strike + hedge_dist} for downside protection"
                         rationale = f"PE < MA9 (Bullish) indicated by Daily Trend Engine. Position aims to profit from upward price movement while hedged against downside."
                         risk_profile = "HEDGED - Max loss capped by ITM Put + Iron Fly wings"
-                        
+
                     else: # BEARISH
                         legs_specs = [
                             {"role": "Primary Trend", "type": "FUT", "strike": 0, "opt_type": None, "action": "SELL", "qty": fut_qty},
@@ -407,7 +407,7 @@ def refresh_market_data():
                             {"role": "Iron Fly Wing", "type": "OPT", "strike": atm_strike + wing_dist, "opt_type": "CE", "action": "BUY", "qty": fly_qty},
                             {"role": "Iron Fly Wing", "type": "OPT", "strike": atm_strike - wing_dist, "opt_type": "PE", "action": "BUY", "qty": fly_qty}
                         ]
-                        
+
                         # Strategy Details for UI
                         primary_action = "SELL FUTURES"
                         primary_detail = f"Go SHORT on {inst_config['display_name']} Futures at ₹{ltp:.2f}"
@@ -419,14 +419,14 @@ def refresh_market_data():
                     # 2. Construct Symbols & Fetch Data
                     symbols_map = {}
                     symbols_list = []
-                    
+
                     for leg in legs_specs:
                         sym = construct_symbol(symbol, leg["type"], expiry, leg["strike"], leg["opt_type"])
                         leg["symbol"] = sym
                         symbols_map[sym] = 0.0 # Default
                         if sym:
                             symbols_list.append(sym)
-                    
+
                     # Batch Fetch from Fyers (Optimized with Cache)
                     if symbols_list:
                         try:
@@ -439,24 +439,24 @@ def refresh_market_data():
                     # 3. Build Detailed Composition List
                     composition = []
                     current_pnl = 0.0 # Estimate start P&L (usually spread loss)
-                    
+
                     for leg in legs_specs:
                         leg_ltp = symbols_map.get(leg["symbol"], 0.0)
-                        
+
                         # Fallback for FUT if 0 (use main ltp)
                         if leg["type"] == "FUT" and leg_ltp <= 0:
                             leg_ltp = ltp
-                            
+
                         # [HARDENING] If Option LTP is 0, try to estimate roughly from intrinsic?
                         # For now, just keep 0 but ensure no crash.
-                        
+
                         # Calculate Approx Value (Not margin, but contract value)
                         # Ensure all variables are floats to prevent TypeErrors
                         try:
                             value = float(leg_ltp) * float(leg["qty"]) * float(lot_size)
                         except:
                             value = 0.0
-                        
+
                         composition.append({
                             "role": leg["role"],
                             "instrument": leg["type"],
@@ -471,15 +471,15 @@ def refresh_market_data():
                     # ════════════════════════════════════════════════════════════
                     # BENCHMARK STRATEGY PAYOFF METRICS (STEPS 4.1 - 4.7)
                     # ════════════════════════════════════════════════════════════
-                    
+
                     # 4.1 LEG-WISE PREMIUM SUMMARY
                     total_premium_received = 0.0
                     total_premium_paid = 0.0
                     futures_entry_value = 0.0
-                    
+
                     for leg in composition:
                         premium = leg["ltp"] * leg["qty"] * lot_size
-                        
+
                         if leg["instrument"] == "FUT":
                             futures_entry_value = leg["ltp"]
                             leg["premium_flow"] = 0  # Futures don't have premium
@@ -492,20 +492,20 @@ def refresh_market_data():
                             total_premium_paid += premium
                             leg["premium_flow"] = -premium
                             leg["exposure"] = "LONG"
-                    
+
                     # 4.2 NET CREDIT / DEBIT
                     net_premium = total_premium_received - total_premium_paid
                     net_premium_type = "CREDIT" if net_premium >= 0 else "DEBIT"
-                    
+
                     # 4.3 MAX PROFIT CALCULATION
                     # Iron Fly Max Profit = Net Premium from straddle - wing cost
                     # Futures Profit = Assumed favorable move = hedge_dist worth of points
                     # Hedge Cost = Premium paid for hedge option
-                    
+
                     hedge_cost = 0.0
                     iron_fly_credit = 0.0
                     wing_cost = 0.0
-                    
+
                     for leg in composition:
                         if "Hedge" in leg["role"]:
                             hedge_cost = abs(leg.get("premium_flow", 0))
@@ -513,35 +513,35 @@ def refresh_market_data():
                             iron_fly_credit += leg.get("premium_flow", 0)
                         elif "Wing" in leg["role"]:
                             wing_cost += abs(leg.get("premium_flow", 0))
-                    
+
                     iron_fly_max_profit = iron_fly_credit  # At expiry if price = ATM
                     futures_max_profit = hedge_dist * fut_qty * lot_size  # Favorable move up to hedge distance
                     max_profit = iron_fly_max_profit + futures_max_profit - hedge_cost
                     max_profit_zone = f"Price at ATM ({atm_strike}) + {hedge_dist} pts in trend direction"
-                    
+
                     # 4.4 MAX LOSS CALCULATION
                     # Worst case: Futures move against trend by hedge_dist (hedge activates)
                     hedge_strike = atm_strike + hedge_dist if trend == "BULLISH" else atm_strike - hedge_dist
                     futures_loss_till_hedge = hedge_dist * fut_qty * lot_size  # Loss until hedge kicks in
                     hedge_protection_gain = hedge_dist * hedge_qty * lot_size  # Intrinsic gain from hedge
-                    
+
                     # Iron Fly Max Loss = Wing width - Net Credit (if price moves beyond wings)
                     iron_fly_max_loss = (wing_dist * fly_qty * lot_size) - iron_fly_credit + wing_cost
-                    
+
                     max_loss = futures_loss_till_hedge - hedge_protection_gain + iron_fly_max_loss
                     loss_capped = True
                     naked_exposure = False
-                    
+
                     # 4.5 BREAK-EVEN CALCULATION
                     net_cost_per_unit = (hedge_cost + wing_cost - iron_fly_credit) / (fut_qty * lot_size) if (fut_qty * lot_size) > 0 else 0
-                    
+
                     if trend == "BULLISH":
                         upper_breakeven = ltp + net_cost_per_unit
                         lower_breakeven = hedge_strike  # Protected below this
                     else:
                         upper_breakeven = hedge_strike  # Protected above this
                         lower_breakeven = ltp - net_cost_per_unit
-                    
+
                     # 4.6 RISK-REWARD RATIO
                     risk_reward = abs(max_profit / max_loss) if max_loss != 0 else 0
                     if risk_reward >= 2:
@@ -550,7 +550,7 @@ def refresh_market_data():
                         trade_classification = "BALANCED"
                     else:
                         trade_classification = "AGGRESSIVE"
-                    
+
                     # 4.7 VALIDATION CHECKLIST
                     risk_limit = 50000  # Max acceptable loss
                     validation = {
@@ -560,19 +560,19 @@ def refresh_market_data():
                         "benchmark_compliant": True  # Following exact strategy
                     }
                     trade_approved = all(validation.values())
-                    
+
                     # ════════════════════════════════════════════════════════════
                     # STEP 5: EXPANDED SCENARIO SIMULATOR (Leg-wise P&L)
                     # ════════════════════════════════════════════════════════════
                     def calculate_detailed_scenario(move, trend, ltp, atm_strike, hedge_strike, composition):
                         target_price = ltp + move
-                        
+
                         # Futures P&L
                         if trend == "BULLISH":
                             fut_pnl = move * fut_qty * lot_size
                         else:
                             fut_pnl = -move * fut_qty * lot_size
-                        
+
                         # Hedge P&L (Intrinsic at expiry - Premium)
                         if trend == "BULLISH":
                             # Long PUT at hedge_strike
@@ -581,7 +581,7 @@ def refresh_market_data():
                             # Long CALL at hedge_strike
                             intrinsic = max(0, target_price - hedge_strike)
                         hedge_pnl = (intrinsic * hedge_qty * lot_size) - hedge_cost
-                        
+
                         # Iron Fly P&L
                         dist_from_atm = abs(target_price - atm_strike)
                         if dist_from_atm <= 0:
@@ -590,9 +590,9 @@ def refresh_market_data():
                             fly_pnl = iron_fly_credit - (wing_dist * fly_qty * lot_size)
                         else:
                             fly_pnl = iron_fly_credit - (dist_from_atm * fly_qty * lot_size)
-                        
+
                         total_pnl = fut_pnl + hedge_pnl + fly_pnl
-                        
+
                         return {
                             "move": move,
                             "target_price": round(target_price, 2),
@@ -602,13 +602,13 @@ def refresh_market_data():
                             "net_pnl": round(total_pnl, 2),
                             "is_profit": total_pnl >= 0
                         }
-                    
+
                     scenario_moves = get_scenario_moves(symbol, ltp)
                     scenario_analysis = [
                         calculate_detailed_scenario(m, trend, ltp, atm_strike, hedge_strike, composition)
                         for m in scenario_moves
                     ]
-                    
+
                     # ════════════════════════════════════════════════════════════
                     # BUILD RECOMMENDED POSITION OBJECT
                     # ════════════════════════════════════════════════════════════
@@ -624,9 +624,9 @@ def refresh_market_data():
                         "risk_profile": risk_profile,
                         "confidence": "HIGH" if trade_approved else "MEDIUM",
                         "composition": composition,
-                        
+
                         # 4.1 Leg-wise included in composition
-                        
+
                         # 4.2 Net Credit/Debit
                         "net_premium": {
                             "total_received": round(total_premium_received, 2),
@@ -635,7 +635,7 @@ def refresh_market_data():
                             "type": net_premium_type,
                             "futures_entry": round(futures_entry_value, 2)
                         },
-                        
+
                         # 4.3-4.4 Max Profit/Loss
                         "pnl_estimation": {
                             "iron_fly_max_profit": round(iron_fly_max_profit, 2),
@@ -643,37 +643,37 @@ def refresh_market_data():
                             "hedge_cost": round(hedge_cost, 2),
                             "max_profit": round(max_profit, 2),
                             "max_profit_zone": max_profit_zone,
-                            
+
                             "futures_loss_till_hedge": round(futures_loss_till_hedge, 2),
                             "hedge_protection": round(hedge_protection_gain, 2),
                             "iron_fly_max_loss": round(iron_fly_max_loss, 2),
                             "max_loss": round(max_loss, 2),
                             "loss_capped": loss_capped,
                             "naked_exposure": naked_exposure,
-                            
+
                             "entry_price": ltp,
                             "current_price": ltp
                         },
-                        
+
                         # 4.5 Break-Even
                         "breakeven": {
                             "upper": round(upper_breakeven, 2),
                             "lower": round(lower_breakeven, 2)
                         },
-                        
+
                         # 4.6 Risk-Reward
                         "risk_reward": {
                             "ratio": round(risk_reward, 2),
                             "classification": trade_classification
                         },
-                        
+
                         # 4.7 Validation
                         "validation": validation,
                         "trade_approved": trade_approved,
-                        
+
                         # Scenario Analysis
                         "scenario_analysis": scenario_analysis,
-                        
+
                         "market_context": {
                             "current_price": ltp,
                             "atm_strike": atm_strike,
@@ -699,10 +699,10 @@ def refresh_market_data():
                             "signal_time": "-"
                         }
                     }
-                
+
                 # Store in state for persistence
                 state_mgr.update("recommended_position", rec_position)
-                
+
             except Exception as te:
                 print(f"⚠️ Trend calculation failed: {te}")
                 trend_data = {"error": str(te)}
@@ -720,13 +720,13 @@ def refresh_market_data():
                         "signal_time": "-"
                     }
                 }
-            
+
             # Get the trend engine state that was just updated by analyze_trend
             ng_engine_state = state_mgr.get_state().get("ng_trend_engine", {})
-            
+
             return jsonify({
-                "success": True, 
-                "ltp": ltp, 
+                "success": True,
+                "ltp": ltp,
                 "atm_strike": atm_strike,
                 "expiry": expiry,
                 "trend": trend_data,
@@ -738,7 +738,7 @@ def refresh_market_data():
             })
         else:
             return jsonify({"success": False, "error": "Failed to fetch market data (LTP is 0 or API error)"})
-            
+
     except Exception as e:
         print(f"Error in refresh: {e}")
         return jsonify({"success": False, "error": str(e)})
@@ -754,9 +754,9 @@ def get_live_orders():
         broker = ensure_broker_connected()
         if not broker or not broker.fyers:
             return jsonify({"success": False, "orders": [], "error": "Fyers not connected"})
-        
+
         orders = broker.get_all_orders()
-        
+
         return jsonify({
             "success": True,
             "orders": orders,
@@ -774,14 +774,14 @@ def get_live_positions():
     """
     try:
         from src.rate_limiter import throttle
-        
+
         broker = ensure_broker_connected()
         if not broker or not broker.fyers:
             return jsonify({"success": False, "positions": [], "error": "Fyers not connected"})
-        
+
         throttle("get_positions")
         resp = broker.fyers.positions()
-        
+
         if resp.get("s") == "ok":
             positions = []
             for p in resp.get("netPositions", []):
@@ -794,9 +794,9 @@ def get_live_positions():
                     "product": p.get("productType", "NRML"),
                     "side": "LONG" if p.get("netQty", 0) > 0 else "SHORT"
                 })
-            
+
             total_pnl = sum([p["pnl"] for p in positions])
-            
+
             return jsonify({
                 "success": True,
                 "positions": positions,
@@ -805,7 +805,7 @@ def get_live_positions():
             })
         else:
             return jsonify({"success": False, "positions": [], "error": resp.get("message", "")})
-            
+
     except Exception as e:
         print(f"Error fetching positions: {e}")
         return jsonify({"success": False, "positions": [], "error": str(e)})
@@ -848,7 +848,7 @@ def get_current_orders():
     """
     exec_state = state_mgr.get_state().get("order_execution_state", {}).copy()
     workflow = state_mgr.get_workflow_state()
-    
+
     # [NEW] Real-time LTP Update Logic (Cached)
     # DISABLED IN ON-DEMAND MODE to save API quota
     from src.config import ON_DEMAND_MODE
@@ -856,7 +856,7 @@ def get_current_orders():
     status = exec_state.get("status", "IDLE")
     last_updated = exec_state.get("ltp_last_updated", 0)
     now = time.time()
-    
+
     # Only auto-fetch LTPs in continuous mode (not on-demand)
     # In on-demand mode, user must click "Refresh" button
     if not ON_DEMAND_MODE and orders and (now - last_updated) > 5:
@@ -864,13 +864,13 @@ def get_current_orders():
             broker = get_data_broker()
             # Collect symbols valid for quoting (ignore None/Empty)
             symbols = [o["symbol"] for o in orders if o.get("symbol")]
-            
+
             if symbols:
                 quotes = broker.get_quotes(symbols)
                 # Verbose logging to confirm data receipt
                 if quotes:
                     print(f"{Fore.MAGENTA}[LTP] Fetched (Fresh): {quotes}{Style.RESET_ALL}")
-                    
+
                     # Update orders locally and in Exec State
                     updated = False
                     for order in orders:
@@ -882,13 +882,13 @@ def get_current_orders():
                                 new_ltp = float(new_ltp)
                             except:
                                 continue
-                                
+
                             current_ltp = order.get("ltp")
                             # Update if missing or changed
                             if current_ltp is None or current_ltp != new_ltp:
                                 order["ltp"] = new_ltp
                                 updated = True
-                            
+
                     if updated:
                         # Save back to Cached State
                         exec_state["orders"] = orders
@@ -898,45 +898,45 @@ def get_current_orders():
                      print(f"{Fore.RED}[LTP] No quotes received for {symbols}{Style.RESET_ALL}")
         except Exception as e:
             print(f"Error updating LTPs: {e}")
-    
+
     # Merge workflow state into response
     exec_state["workflow_state"] = workflow["state"]
     exec_state["workflow_description"] = workflow["description"]
     exec_state["workflow_basket_type"] = workflow["basket_type"]
     exec_state["allowed_transitions"] = workflow["allowed_transitions"]
-    
+
     # [NEW] Add Recommended Position based on Strategy, Trend, and Price
     state = state_mgr.get_state()
-    
+
     # [FIX] Read trend from ng_trend_engine (same source as Dashboard display)
     # This ensures the Recommended Position matches the "Final Trend" badge
     ng_trend_engine = state.get("ng_trend_engine", {})
     ng_strategy_state = state.get("ng_strategy_state", {})
-    
+
     # Priority: 1. ng_strategy_state.trend_bias, 2. state.trend, 3. NEUTRAL
     trend = ng_strategy_state.get("trend_bias") or state.get("trend", "NEUTRAL")
-    
+
     # Also derive trend from ng_trend_engine if available
     if ng_trend_engine:
         ce_leg = ng_trend_engine.get("ce_leg", {})
         pe_leg = ng_trend_engine.get("pe_leg", {})
         ce_below = ce_leg.get("status") == "BELOW"
         pe_below = pe_leg.get("status") == "BELOW"
-        
+
         # Apply same logic as strategy.py
         if pe_below and not ce_below:
             trend = "BULLISH"
         elif ce_below and not pe_below:
             trend = "BEARISH"
         # If both or neither, keep existing trend or NEUTRAL
-    
+
     market_price = state.get("market_price", 0)
     atm_strike = state.get("atm_strike", 0)
-    
+
     # [DEBUG] Log trend derivation for troubleshooting
     print(f"[REC_POS] ng_trend_engine: ce={ng_trend_engine.get('ce_leg', {}).get('status')}, pe={ng_trend_engine.get('pe_leg', {}).get('status')}")
     print(f"[REC_POS] Derived trend: {trend}, market_price: {market_price}, atm_strike: {atm_strike}")
-    
+
     # Build recommended position object
     # [FIX] Use trend directly (derived from ng_trend_engine) instead of signal_type
     if trend in ["BULLISH", "BEARISH"]:
@@ -966,7 +966,7 @@ def get_current_orders():
                 "risk_profile": "HEDGED - Max loss capped by ITM Call + Iron Fly wings",
                 "confidence": "HIGH" if trend == "BEARISH" else "MEDIUM"
             }
-        
+
         # Add market context
         rec_position["market_context"] = {
             "current_price": market_price,
@@ -974,7 +974,7 @@ def get_current_orders():
             "trend_source": "NG Benchmark Trend Engine (Daily CE/PE vs MA9)",
             "signal_time": exec_state.get("signal_time", "-")
         }
-        
+
         exec_state["recommended_position"] = rec_position
     else:
         exec_state["recommended_position"] = {
@@ -989,7 +989,7 @@ def get_current_orders():
                 "signal_time": "-"
             }
         }
-    
+
     return jsonify(exec_state)
 
 @app.route('/api/workflow/state', methods=['GET'])
@@ -1007,10 +1007,10 @@ def transition_workflow():
     data = request.get_json() or {}
     new_state = data.get("to_state")
     basket_type = data.get("basket_type")
-    
+
     if not new_state:
         return jsonify({"status": "error", "message": "Missing to_state"}), 400
-    
+
     success, message = state_mgr.transition_workflow_state(new_state, basket_type)
     if success:
         return jsonify({"status": "success", "message": message})
@@ -1030,28 +1030,28 @@ def execute_orders():
 
     if not basket_id:
         return jsonify({"status": "error", "message": "No basket_id provided"}), 400
-    
+
     # Check Emergency Halt
     emer = state_mgr.get_state().get("emergency_controls", {})
     if emer.get("is_halted"):
         return jsonify({"status": "error", "message": "TRADING HALTED BY ADMIN"}), 403
-    
+
     # Execute basket in background thread to avoid blocking
     import threading
     from src.order_executor import OrderExecutor
     from src.broker import FyersConnector
-    
+
     broker = FyersConnector()
     broker.connect()  # Ensure broker is connected
     executor = OrderExecutor(broker)
-    
+
     def execute_in_background():
         # Pass multiplier to execution logic
         executor.execute_basket(basket_id, multiplier=qty_multiplier)
-    
+
     thread = threading.Thread(target=execute_in_background, daemon=True)
     thread.start()
-    
+
     state_mgr.add_log(f"🚀 Started Basket Execution: {basket_id}")
     return jsonify({"status": "success", "message": f"Basket execution started: {basket_id}"})
 
@@ -1065,12 +1065,12 @@ def get_order_history():
         - type: Filter by ENTRY, ADJUSTMENT, or EXIT
     """
     from src.order_executor import OrderExecutor
-    
+
     limit = request.args.get('limit', 50, type=int)
     basket_type = request.args.get('type', None)
-    
+
     history = OrderExecutor.get_order_history(limit=limit, basket_type=basket_type)
-    
+
     # Calculate summary stats
     stats = {
         "total_baskets": len(history),
@@ -1080,7 +1080,7 @@ def get_order_history():
         "adjustment_count": len([b for b in history if b.get("basket_type") == "ADJUSTMENT"]),
         "exit_count": len([b for b in history if b.get("basket_type") == "EXIT"])
     }
-    
+
     return jsonify({"history": history, "stats": stats})
 
 @app.route('/api/orders/reset', methods=['POST'])
@@ -1091,16 +1091,16 @@ def reset_basket():
     Useful if execution failed due to transient errors (e.g. margin, network).
     """
     exec_state = state_mgr.get_state().get("order_execution_state", {})
-    
+
     if not exec_state.get("basket_id"):
         return jsonify({"status": "error", "message": "No active basket to reset"}), 400
-        
+
     # Reset top-level state
     exec_state["status"] = "PENDING"
     exec_state["error_message"] = None
     exec_state["progress"] = 0
     exec_state["current_order_index"] = 0
-    
+
     # Reset all orders
     for order in exec_state.get("orders", []):
         order["status"] = "PENDING"
@@ -1108,10 +1108,10 @@ def reset_basket():
         order["order_id"] = None
         order["fill_price"] = None
         order["time"] = None
-        
+
     state_mgr.update("order_execution_state", exec_state)
     state_mgr.transition_workflow_state("BASKET_READY")
-    
+
     state_mgr.add_log(f"🔄 Basket Reset: {exec_state['basket_id']}")
     return jsonify({"status": "success", "message": "Basket reset to PENDING"})
 
@@ -1133,22 +1133,22 @@ def get_strategy_state():
 def update_strategy_state():
     """Manually transition strategy state"""
     from src.strategy_state import StrategyStateEngine, StrategyState
-    
+
     data = request.json or {}
     new_state_str = data.get("new_state")
     reason = data.get("reason", "Manual transition")
-    
+
     if not new_state_str:
         return jsonify({"status": "error", "message": "new_state required"}), 400
-    
+
     try:
         new_state = StrategyState(new_state_str)
     except ValueError:
         return jsonify({"status": "error", "message": f"Invalid state: {new_state_str}"}), 400
-    
+
     engine = StrategyStateEngine.get_instance()
     result = engine.transition_to(new_state, reason)
-    
+
     return jsonify(result)
 
 @app.route('/api/orders/master', methods=['GET'])
@@ -1162,13 +1162,13 @@ def get_master_orders():
     start_date = request.args.get('start_date')
     end_date = request.args.get('end_date')
     search = request.args.get('search')
-    
+
     from src.database import UnifiedOrderManager
     db = UnifiedOrderManager.get_instance()
     baskets = db.list_baskets(
-        limit=limit, 
-        status=status, 
-        basket_type=b_type, 
+        limit=limit,
+        status=status,
+        basket_type=b_type,
         strategy=strategy,
         start_date=start_date,
         end_date=end_date,
@@ -1195,56 +1195,56 @@ def handle_order_action():
     data = request.json or {}
     basket_id = data.get("basket_id")
     action = data.get("action")
-    
+
     if not basket_id or not action:
         return jsonify({"status": "error", "message": "basket_id and action required"}), 400
-        
+
     from src.order_intent import OrderIntentEngine
     from src.order_executor import OrderExecutor
     from src.database import UnifiedOrderManager
-    
+
     db = UnifiedOrderManager.get_instance()
     basket = db.get_basket(basket_id)
-    
+
     if not basket:
         return jsonify({"status": "error", "message": "Basket not found"}), 404
-        
+
     broker = get_data_broker()
     intent_engine = OrderIntentEngine.get_instance(broker)
     intent_engine._current_intent = basket # Point engine to this basket
-    
+
     if action == "APPROVE":
         result = intent_engine.validate_intent()
         return jsonify(result)
-        
+
     elif action == "CANCEL":
         reason = data.get("reason", "User cancelled via console")
         result = intent_engine.cancel_intent(reason)
         return jsonify(result)
-        
+
     elif action == "EXECUTE":
         # Check Strategy State
         from src.strategy_state import StrategyStateEngine, StrategyState
         strat_engine = StrategyStateEngine.get_instance()
-        
+
         # Transition strat state to EXECUTING if it was READY_FOR_ENTRY
         if strat_engine.current_state == StrategyState.READY_FOR_ENTRY:
              strat_engine.transition_to(StrategyState.IN_POSITION, "Execution started by user")
-        
+
         # Mark intent as executing
         intent_engine.mark_executing()
-        
+
         # Start executor
         executor = OrderExecutor(broker)
         def run_exec():
              executor.execute_basket(basket_id)
-             
+
         import threading
         thread = threading.Thread(target=run_exec, daemon=True)
         thread.start()
-        
+
         return jsonify({"success": True, "message": f"Execution started for {basket_id}"})
-        
+
     elif action == "RETRY":
         # Reset and Execute
         basket["status"] = "PENDING"
@@ -1261,15 +1261,15 @@ def handle_order_action():
 def check_adjustments():
     """Check if any adjustment rules are triggered"""
     from src.adjustment_engine import AdjustmentEngine
-    
+
     broker = get_data_broker()
     if not broker:
         return jsonify({"error": "Broker not available"}), 503
-    
+
     symbol_base = request.json.get('symbol', 'NATGASMINI') if request.json else 'NATGASMINI'
     engine = AdjustmentEngine(broker, symbol_base)
     result = engine.check_adjustments()
-    
+
     return jsonify(result)
 
 @app.route('/api/adjustment/trigger', methods=['POST'])
@@ -1278,18 +1278,18 @@ def check_adjustments():
 def trigger_adjustment():
     """Manually trigger an adjustment"""
     from src.adjustment_engine import AdjustmentEngine
-    
+
     data = request.json or {}
     action = data.get("action")
     reason = data.get("reason", "Manual trigger")
-    
+
     if not action:
         return jsonify({"status": "error", "message": "action required"}), 400
-    
+
     broker = get_data_broker()
     engine = AdjustmentEngine(broker)
     result = engine.trigger_adjustment(action, reason)
-    
+
     return jsonify(result)
 
 @app.route('/api/adjustment/status', methods=['GET'])
@@ -1321,7 +1321,7 @@ def reject_trade():
     """
     data = request.json
     symbol = data.get('symbol', 'NATGASMINI')
-    
+
     state_mgr.update("pending_signal", None, symbol=symbol)
     state_mgr.add_log(f"🚫 USER COMMAND [{symbol}]: Trade Rejected/Dismissed.")
     return jsonify({"status": "success", "message": f"Signal Cleared for {symbol}"})
@@ -1350,17 +1350,17 @@ def change_password():
     data = request.json
     current_password = data.get("current_password")
     new_password = data.get("new_password")
-    
+
     username = session.get('username')
     state_mgr = StateManager.get_instance()
-    
+
     # Verify current password first
     token, user = state_mgr.user_manager.authenticate(username, current_password)
     if not user:
          return jsonify({"status": "error", "message": "Incorrect current password"}), 401
-         
+
     success, msg = state_mgr.user_manager.change_password(username, new_password)
-    
+
     if success:
         state_mgr.add_log(f"Password changed for {username}", category="AUTH", user=username)
         return jsonify({"status": "success", "message": "Password updated successfully"})
@@ -1374,17 +1374,17 @@ def export_logs_csv():
     import csv
     import io
     from flask import Response
-    
+
     state_mgr = StateManager.get_instance()
     logs = getattr(state_mgr, 'logs', []) # Access raw structured logs
-    
+
     # Create CSV in memory
     output = io.StringIO()
     writer = csv.writer(output)
-    
+
     # Headers
     writer.writerow(['Timestamp', 'Category', 'User', 'Message'])
-    
+
     # Data
     for log in logs:
         # Handle both dict (structured) and str (legacy) logs if any mixed
@@ -1392,9 +1392,9 @@ def export_logs_csv():
              writer.writerow([log.get('timestamp',''), log.get('category',''), log.get('user',''), log.get('message','')])
         else:
              writer.writerow(['-', 'LEGACY', '-', str(log)])
-             
+
     output.seek(0)
-    
+
     return Response(
         output.getvalue(),
         mimetype="text/csv",
@@ -1408,20 +1408,20 @@ def export_logs_csv():
 def admin_update_config():
     data = request.json
     state_mgr = StateManager.get_instance()
-    
+
     current_conf = state_mgr.get_state().get("admin_config", {})
-    
+
     updated_keys = []
     for k, v in data.items():
         if k in current_conf: # Only update existing keys
             current_conf[k] = v
             updated_keys.append(k)
-            
+
     if updated_keys:
         state_mgr.update("admin_config", current_conf)
         state_mgr.add_log(f"🛠️ ADMIN CONFIG: Updated {', '.join(updated_keys)}", category="ADMIN", user=session.get('username'))
         state_mgr.add_alert("INFO", "ADMIN", f"Configuration updated by {session.get('username')}: {', '.join(updated_keys)}")
-        
+
     return jsonify({"status": "success", "config": current_conf})
 
 @app.route('/api/admin/emergency', methods=['POST'])
@@ -1432,13 +1432,13 @@ def admin_emergency():
     action = data.get("action")
     reason = data.get("reason", "No reason provided")
     user = session.get('username')
-    
+
     state_mgr = StateManager.get_instance()
     emer_state = state_mgr.get_state().get("emergency_controls", {}).copy()
-    
+
     log_msg = f"EMERGENCY ACTION: {action} by {user}. Reason: {reason}"
     state_mgr.add_log(log_msg, category="CRITICAL", user=user)
-    
+
     if action == "HALT":
         emer_state["is_halted"] = True
         state_mgr.add_alert("CRITICAL", "ADMIN", f"🚨 TRADING HALTED by {user}: {reason}")
@@ -1453,7 +1453,7 @@ def admin_emergency():
     elif action == "FORCE_OBS":
         emer_state["force_observation"] = True
         state_mgr.add_alert("WARNING", "ADMIN", f"Forced Observation Mode by {user}: {reason}")
-        
+
     state_mgr.update("emergency_controls", emer_state)
     return jsonify({"status": "success", "action": action, "state": emer_state})
 
@@ -1473,11 +1473,11 @@ def fyers_callback():
     auth_code = request.args.get('auth_code')
     if not auth_code:
         return "Error: No Auth Code received", 400
-        
+
     from src.token_manager import TokenManager
     tm = TokenManager.get_instance()
     res = tm.generate_token_from_code(auth_code)
-    
+
     if res["success"]:
         state_mgr = StateManager.get_instance()
         state_mgr.add_log("✅ LOGIN SUCCESSFUL via Admin Panel", category="ADMIN", user="system")
@@ -1546,13 +1546,58 @@ def admin_mailjet_test():
         return jsonify({"status": "success", "message": "Test email sent."})
     return jsonify({"status": "error", "message": "Test email failed. Check Mailjet credentials, sender verification, and recipient."}), 400
 
+# FYERS credential login routes retained from the existing application behavior.
+@app.route('/api/admin/save_credentials', methods=['POST'])
+@login_required
+@role_required("ADMIN")
+def save_broker_credentials():
+    data = request.get_json(silent=True) or {}
+    app_id, secret_id = data.get("app_id"), data.get("secret_id")
+    fyers_id, pin, totp_key = data.get("fyers_id"), data.get("pin"), data.get("totp_key")
+    if not all([app_id, secret_id, fyers_id, pin, totp_key]):
+        return jsonify({"status": "error", "message": "All fields are required"}), 400
+    from src.token_manager import TokenManager
+    TokenManager.save_headless_credentials(fyers_id, pin, totp_key, app_id, secret_id)
+    state_mgr.add_log("Broker credentials updated", category="ADMIN", user=session.get('username'))
+    return jsonify({"status": "success", "message": "Credentials saved securely"})
+
+@app.route('/api/admin/test_login', methods=['POST'])
+@login_required
+@role_required("ADMIN")
+def test_headless_login():
+    from src.token_manager import TokenManager
+    result = TokenManager.perform_headless_login()
+    if result["success"]:
+        return jsonify({"status": "success", "message": "Login successful. Token generated."})
+    return jsonify({"status": "error", "message": f"Login failed: {result['message']}"}), 400
+
+@app.route('/api/admin/credential_status', methods=['GET'])
+@login_required
+@role_required("ADMIN")
+def get_credential_status():
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+    creds = {key: bool(os.getenv(env)) for key, env in {
+        "fyers_id": "FYERS_ID", "pin": "FYERS_PIN", "totp_key": "FYERS_TOTP_KEY",
+        "app_id": "FYERS_APP_ID", "secret_id": "FYERS_SECRET_ID"
+    }.items()}
+    complete = all(creds.values())
+    return jsonify({"status": "success", "all_configured": complete,
+                    "is_logged_in": bool(os.getenv("FYERS_ACCESS_TOKEN")),
+                    "credentials": creds,
+                    "message": "All credentials configured" if complete else "Some credentials missing"})
+
 @app.route('/api/admin/logout_fyers', methods=['POST'])
 @login_required
 @role_required("ADMIN")
 def admin_logout_fyers():
     try:
-        from src.token_manager import TokenManager
-        TokenManager.get_instance().clear_tokens()
+        from dotenv import unset_key
+        env_path = os.path.join(os.getcwd(), '.env')
+        unset_key(env_path, "FYERS_ACCESS_TOKEN")
+        unset_key(env_path, "FYERS_REFRESH_TOKEN")
+        os.environ.pop("FYERS_ACCESS_TOKEN", None)
+        os.environ.pop("FYERS_REFRESH_TOKEN", None)
         state_mgr.add_log("Fyers tokens cleared by manual logout", category="ADMIN", user=session.get('username'))
         return jsonify({"status": "success", "message": "Logged out from Fyers. Tokens cleared."})
     except Exception as exc:

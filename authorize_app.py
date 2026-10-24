@@ -49,20 +49,20 @@ auth_code = input("Paste the auth_code here: ").strip()
 if auth_code:
     session.set_token(auth_code)
     response = session.generate_token()
-    
+
     if response.get("s") == "ok":
         access_token = response["access_token"]
         refresh_token = response.get("refresh_token", "")
-        
+
         # Save to .env
         from get_token import update_env_file
         update_env_file(access_token, refresh_token)
-        
+
         print()
         print("=" * 60)
         print("✅ SUCCESS! Tokens saved to .env")
         print("=" * 60)
-        print("You can now run the bot. Browser OAuth is configured for the application.")
+        print("You can now run the bot. The headless login should work from now on.")
     else:
         print()
         print(f"❌ Token Generation Failed: {response}")

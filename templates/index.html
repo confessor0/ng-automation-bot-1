@@ -1469,6 +1469,21 @@
                 </div>
             </div>
 
+            <div class="card" style="grid-column: span 2;">
+                <div class="card-title">🔐 Fyers Credentials (Existing Auto-Login)</div>
+                <div id="credentialStatus" style="color:#94a3b8;font-size:13px;margin-bottom:10px;">Checking saved credential status…</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                    <input id="credAppId" class="multiplier-input" placeholder="Fyers App ID">
+                    <input id="credSecret" type="password" class="multiplier-input" placeholder="Fyers App Secret" autocomplete="new-password">
+                    <input id="credFyersId" class="multiplier-input" placeholder="Fyers Login ID">
+                    <input id="credPin" type="password" class="multiplier-input" placeholder="Fyers PIN" autocomplete="new-password">
+                    <input id="credTotp" type="password" class="multiplier-input" placeholder="Fyers TOTP key" autocomplete="new-password">
+                </div>
+                <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">
+                    <button class="btn btn-secondary" onclick="saveFyersCredentials()">💾 Save Credentials</button>
+                    <button class="btn btn-primary" onclick="triggerFyersAutoLogin()">🚀 Auto-Login</button>
+                </div>
+            </div>
 
 
             <div class="card">
@@ -2978,6 +2993,43 @@
                 });
         }
 
+        async function checkFyersCredentialStatus() {
+            const el = document.getElementById('credentialStatus');
+            if (!el) return;
+            try {
+                const response = await fetch('/api/admin/credential_status');
+                const data = await response.json();
+                el.textContent = data.status === 'success' ? data.message : 'Could not read credential status.';
+                el.style.color = data.all_configured ? '#10b981' : '#fbbf24';
+            } catch (_) { el.textContent = 'Could not read credential status.'; }
+        }
+
+        async function saveFyersCredentials() {
+            const body = {
+                app_id: document.getElementById('credAppId').value.trim(),
+                secret_id: document.getElementById('credSecret').value,
+                fyers_id: document.getElementById('credFyersId').value.trim(),
+                pin: document.getElementById('credPin').value,
+                totp_key: document.getElementById('credTotp').value.trim()
+            };
+            try {
+                const response = await fetch('/api/admin/save_credentials', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.message || 'Could not save credentials');
+                ['credAppId','credSecret','credFyersId','credPin','credTotp'].forEach(id => document.getElementById(id).value = '');
+                alert(result.message); checkFyersCredentialStatus();
+            } catch (error) { alert(error.message); }
+        }
+
+        async function triggerFyersAutoLogin() {
+            try {
+                const response = await fetch('/api/admin/test_login', {method:'POST'});
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.message || 'Fyers login failed');
+                alert(result.message); checkFyersCredentialStatus();
+            } catch (error) { alert(error.message); }
+        }
+
         function updateClock() {
             const now = new Date();
             const timeStr = now.getHours().toString().padStart(2, '0') + ':' +
@@ -2991,6 +3043,7 @@
 
         updateClock();
         loadMailjetSettings();
+        checkFyersCredentialStatus();
 
 
         function toggleStatus() {

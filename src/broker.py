@@ -22,18 +22,33 @@ class FyersConnector:
 
         try:
             self.fyers = fyersModel.FyersModel(
-                client_id=self.client_id, 
+                client_id=self.client_id,
                 token=self.access_token,
-                is_async=False, 
+                is_async=False,
                 log_path=""
             )
             # Verify token by fetching profile
             self.profile = self.fyers.get_profile()
-            
+
             if self.profile.get("s") == "ok":
                 name = self.profile.get("data", {}).get("name", "Unknown")
-                
-                print(f"{Fore.GREEN}✅ FYERS CONNECTED: {name} (ID: {self.client_id}){Style.RESET_ALL}")
+
+                # Check if autonomous login credentials are configured
+                import os
+                from dotenv import load_dotenv
+                load_dotenv(override=True)
+                has_auto_creds = all([
+                    os.getenv("FYERS_ID"),
+                    os.getenv("FYERS_PIN"),
+                    os.getenv("FYERS_TOTP_KEY")
+                ])
+
+                if has_auto_creds:
+                    print(f"{Fore.GREEN}✅ FYERS CONNECTED (AUTONOMOUS LOGIN): {name} (ID: {self.client_id}){Style.RESET_ALL}")
+                    print(f"{Fore.CYAN}🔐 All Credentials Configured - Auto-Login Enabled{Style.RESET_ALL}")
+                else:
+                    print(f"{Fore.GREEN}✅ FYERS CONNECTED: {name} (ID: {self.client_id}){Style.RESET_ALL}")
+
                 return True
             else:
                 msg = self.profile.get("message", "Unknown Error")
@@ -44,7 +59,7 @@ class FyersConnector:
         except Exception as e:
             print(f"{Fore.RED}❌ Connection Failed: {e}{Style.RESET_ALL}")
             return False
-            
+
     def get_funds(self):
         """
         Fetches detailed fund limits.
@@ -53,20 +68,20 @@ class FyersConnector:
         if not self.fyers:
             # Simulation Data for UI Testing
             return {"capital": 500000.0, "used_margin": 125000.0, "available_balance": 375000.0}
-            
+
         try:
             throttle("get_funds")  # Rate limiting
             funds_resp = self.fyers.funds()
-            
+
             if funds_resp.get("s") == "ok":
                 fund_limits = funds_resp.get("fund_limit", [])
-                
+
                 capital = 0.0
                 used = 0.0
-                
+
                 for f in fund_limits:
                     title = f.get("title", "")
-                    
+
                     if title == "Total Balance" or title == "total_balance":
                         equity_amt = f.get("equityAmount", 0.0)
                         commodity_amt = f.get("commodityAmount", 0.0)
@@ -75,17 +90,17 @@ class FyersConnector:
                         equity_used = f.get("equityAmount", 0.0)
                         commodity_used = f.get("commodityAmount", 0.0)
                         used = equity_used if equity_used > 0 else commodity_used
-                
+
                 # If still 0, try to get from top-level fields
                 if capital == 0:
                     capital = funds_resp.get("total_balance", 0.0)
-                        
+
                 available = capital - used
-                
-                
+
+
                 return {
-                    "capital": capital, 
-                    "used_margin": used, 
+                    "capital": capital,
+                    "used_margin": used,
                     "available_balance": available
                 }
             else:
@@ -98,16 +113,16 @@ class FyersConnector:
         """
         Checks if the symbol is valid by fetching a quote depth.
         """
-        if not self.fyers: 
+        if not self.fyers:
             return False
-            
+
         try:
             throttle("check_symbol")  # Rate limiting
             data = {"symbols": symbol}
             response = self.fyers.quotes(data=data)
             if response.get("s") == "ok" and symbol in response.get("d", [])[0].get("n"):
                return True
-            return False 
+            return False
         except:
             return False
 
@@ -134,10 +149,10 @@ class FyersConnector:
                 "disclosedQty": 0,
                 "offlineOrder": False,
             }
-            
+
             throttle("place_order")  # Rate limiting
             resp = self.fyers.place_order(data=data)
-            
+
             if resp.get("s") == "ok":
                 order_id = resp.get("id")
                 print(f"{Fore.GREEN}✅ ORDER PLACED: {side} {qty}x {symbol} [ID: {order_id}]{Style.RESET_ALL}")
@@ -146,12 +161,12 @@ class FyersConnector:
                 error_msg = resp.get('message', 'Unknown error')
                 print(f"{Fore.RED}❌ ORDER FAILED: {error_msg}{Style.RESET_ALL}")
                 return {"s": "error", "message": error_msg}
-                
-                
+
+
         except Exception as e:
             print(f"{Fore.RED}❌ Order Exception: {e}{Style.RESET_ALL}")
             return {"s": "error", "message": str(e)}
-    
+
     def get_order_status(self, order_id):
         """
         Fetches the current status of a placed order.
@@ -163,11 +178,11 @@ class FyersConnector:
         """
         if not self.fyers:
             return {"status": "FILLED", "tradedPrice": 10.50, "qty": 1}  # Simulation
-        
+
         try:
             # Fyers orderbook API
             resp = self.fyers.orderbook()
-            
+
             if resp.get("s") == "ok" and "orderBook" in resp:
                 for order in resp["orderBook"]:
                     if order.get("id") == order_id:
@@ -179,19 +194,19 @@ class FyersConnector:
                             "5": "PARTIALLY_FILLED",
                             "6": "TRANSIT"
                         }
-                        
+
                         raw_status = str(order.get("status", "1"))
                         status = status_map.get(raw_status, "PENDING")
-                        
+
                         return {
                             "status": status,
                             "tradedPrice": order.get("tradedPrice", 0.0),
                             "qty": order.get("qty", 0)
                         }
-            
+
             # Order not found or API error
             return {"status": "PENDING", "tradedPrice": 0.0, "qty": 0}
-            
+
         except Exception as e:
             print(f"{Fore.RED}❌ Order Status Exception: {e}{Style.RESET_ALL}")
             return {"status": "PENDING", "tradedPrice": 0.0, "qty": 0}
@@ -202,23 +217,23 @@ class FyersConnector:
         Returns list of orders with standardized format for UI.
         """
         from src.rate_limiter import throttle
-        
+
         if not self.fyers:
             # Simulation data
             return []
-        
+
         try:
             throttle("get_orders")
             resp = self.fyers.orderbook()
-            
+
             if resp.get("s") == "ok" and "orderBook" in resp:
                 orders = []
                 status_map = {
-                    1: "PENDING", 2: "FILLED", 3: "REJECTED", 
+                    1: "PENDING", 2: "FILLED", 3: "REJECTED",
                     4: "CANCELLED", 5: "PARTIAL", 6: "TRANSIT"
                 }
                 side_map = {1: "BUY", -1: "SELL"}
-                
+
                 for o in resp.get("orderBook", []):
                     orders.append({
                         "id": o.get("id", ""),
@@ -236,7 +251,7 @@ class FyersConnector:
                 return orders
             else:
                 return []
-                
+
         except Exception as e:
             print(f"{Fore.RED}Error fetching orders: {e}{Style.RESET_ALL}")
             return []
@@ -247,19 +262,19 @@ class FyersConnector:
         """
         if not self.fyers:
             return []
-            
+
         try:
             # [NEW] Retry Logic for Positions
             retries = 3
             backoff = 1
-            
+
             for attempt in range(retries):
                 resp = self.fyers.positions()
-                
+
                 # Check for Rate Limit or success
                 if resp.get("s") == "ok":
                     return resp.get("netPositions", [])
-                
+
                 msg = resp.get("message", "").lower()
                 if resp.get("code") == 429 or "limit reached" in msg:
                     print(f"{Fore.YELLOW}⚠️ Positions Rate Limit. Retrying in {backoff}s...{Style.RESET_ALL}")
@@ -269,7 +284,7 @@ class FyersConnector:
                 else:
                     print(f"Error fetching positions: {resp.get('message')}")
                     return []
-            
+
             return []
         except Exception as e:
             print(f"Position fetch error: {e}")
@@ -282,30 +297,30 @@ class FyersConnector:
         """
         if not self.fyers:
             return False
-            
+
         # Determine current side
         positions = self.get_positions()
         target_pos = next((p for p in positions if p.get('symbol') == symbol), None)
-        
+
         if not target_pos:
             print(f"{Fore.YELLOW}⚠️  Close failed: Position for {symbol} not found.{Style.RESET_ALL}")
             return False
-            
+
         net_qty = int(target_pos.get('netQty', 0))
         if net_qty == 0:
             print(f"{Fore.YELLOW}ℹ️  Position {symbol} is already closed.{Style.RESET_ALL}")
             return True
-            
+
         # If NetQty > 0 (Long), we need to SELL. Side = -1
         # If NetQty < 0 (Short), we need to BUY. Side = 1
         side = -1 if net_qty > 0 else 1
         side_str = "SELL" if side == -1 else "BUY"
-        
+
         # Qty to close (ensure positive)
         # If arg qty is provided, use it, else close all.
         # Logic: We usually want to close specific amount.
         qty_to_close = qty if qty > 0 else abs(net_qty)
-        
+
         return self.place_order(symbol, side_str, qty_to_close)
     def get_symbol_info(self, symbol):
         """
@@ -329,26 +344,26 @@ class FyersConnector:
         """
         if not self.fyers or not symbols_list:
             return {}
-            
+
         try:
             # Join symbols with comma (max 50 per call usually)
             sym_str = ",".join(symbols_list)
             data = {"symbols": sym_str}
-            
+
             # [NEW] Rate Limit Handling with Retries
             retries = 3
             backoff = 2
-            
+
             for attempt in range(retries):
                 response = self.fyers.quotes(data=data)
-                
+
                 # Check for 429 Rate Limit
                 if response.get("code") == 429 or "limit reached" in str(response).lower():
                     print(f"{Fore.YELLOW}⚠️ Rate Limit Reached. Sleeping {backoff}s...{Style.RESET_ALL}")
                     time.sleep(backoff)
                     backoff *= 2
                     continue # Retry
-                
+
                 # Success
                 if response.get("s") == "ok":
                     result = {}
@@ -358,16 +373,16 @@ class FyersConnector:
                         if sym and lp:
                              result[sym] = lp
                     return result
-                
+
                 # Token Expiry Check
                 msg = response.get("message", "")
                 if "Token" in msg or "expire" in msg.lower() or "Invalid" in msg:
                     self.connect()
                     time.sleep(1)
                     # Loop will retry
-                    
+
                 break # If not 429 or Token error, return whatever we got
-                
+
             return {}
         except Exception as e:
             # Reconnect logic if needed
