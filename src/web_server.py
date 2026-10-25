@@ -1851,6 +1851,11 @@ def list_simulations():
     )
     return jsonify({"simulations": rows, "count": len(rows)})
 
+@app.route('/simulator', methods=['GET'])
+@login_required
+def simulator_page():
+    return render_template('simulator.html')
+
 
 @app.route('/api/simulations/<simulation_id>', methods=['DELETE'])
 @login_required
@@ -2433,6 +2438,43 @@ def admin_backup():
     safe_settings = __import__('src.notification_service', fromlist=['load_provider_settings']).load_provider_settings()
     for key in ("brevo_api_key", "brevo_smtp_key", "mailjet_api_key", "mailjet_secret_key"): safe_settings[key] = "[REDACTED]"
     return jsonify({"created_at": datetime.now(TIMEZONE).isoformat(), "state": safe_state, "notifications": safe_settings, "strategy_versions": _read_strategy_versions()})
+
+@app.route('/api/admin/backup/restore', methods=['POST'])
+@login_required
+@role_required("ADMIN")
+def admin_backup_restore():
+    data = request.get_json(silent=True) or {}
+    if not data.get("state") and not data.get("strategy_versions"):
+        return jsonify({"status": "error", "message": "A valid backup payload is required"}), 400
+    manager = StateManager.get_instance()
+    if isinstance(data.get("state"), dict):
+        safe = {key: value for key, value in data["state"].items() if key in ("admin_config", "email_notification_config", "emergency_controls")}
+        for key, value in safe.items(): manager.update(key, value)
+    if isinstance(data.get("strategy_versions"), list): _write_strategy_versions(data["strategy_versions"][:100])
+    manager.add_log("Administrative backup restored", category="ADMIN", user=session.get('username'))
+    return jsonify({"status": "success", "message": "Safe configuration backup restored"})
+
+@app.route('/api/admin/baskets/<basket_id>/lifecycle', methods=['POST'])
+@login_required
+@role_required("RISK_MANAGER")
+def admin_basket_lifecycle(basket_id):
+    from src.database import UnifiedOrderManager
+    db = UnifiedOrderManager.get_instance(); basket = db.get_basket(basket_id)
+    if not basket: return jsonify({"status": "error", "message": "Basket not found"}), 404
+    data = request.get_json(silent=True) or {}; target = str(data.get("status") or "").upper()
+    allowed = {"CANDIDATE", "PENDING", "APPROVED", "ACTIVE", "WEAKENING", "EXIT_RECOMMENDED", "CLOSED", "CANCELLED"}
+    if target not in allowed: return jsonify({"status": "error", "message": "Invalid lifecycle status"}), 400
+    basket["status"] = target; db.upsert_basket(basket)
+    StateManager.get_instance().add_log(f"Basket {basket_id} lifecycle: {target}", category="RISK", user=session.get('username'))
+    return jsonify({"status": "success", "basket": db.get_basket(basket_id)})
+
+@app.route('/api/admin/data-quality', methods=['GET'])
+@login_required
+@role_required("VIEWER")
+def admin_data_quality():
+    state = StateManager.get_instance().get_state(); engine = state.get("ng_trend_engine", {})
+    return jsonify({"system_health": state.get("system_health", {}), "trend": state.get("trend", "NEUTRAL"),
+                    "engine": engine, "alerts": [a for a in state.get("alerts", []) if str(a.get("category", "")).upper() in ("DATA", "DATA_QUALITY")][:20]})
 
 @app.route('/api/admin/update_config', methods=['POST'])
 @login_required
