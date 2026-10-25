@@ -1656,6 +1656,11 @@
                             <option value="brevo">Brevo</option>
                         </select>
                     </label>
+                    <label style="font-size:12px;color:#94a3b8">Brevo transport
+                        <select id="admBrevoTransport" class="multiplier-input" style="width:100%" onchange="toggleBrevoTransport()">
+                            <option value="api">Brevo API</option><option value="smtp">Brevo SMTP relay</option>
+                        </select>
+                    </label>
                     <div style="font-size:12px;color:#94a3b8">Trend change alerts</div>
                     <label><input type="checkbox" id="admNotifyPotential" checked> Potential intraday changes <span style="color:#fbbf24;font-size:11px">(not confirmed until daily close)</span></label>
                     <label><input type="checkbox" id="admNotifyConfirmed" checked> Confirmed daily changes</label>
@@ -1686,6 +1691,12 @@
                     <input type="email" id="admMailjetFrom" class="multiplier-input" style="width:100%" value="mcxalerts@webprobity.com" placeholder="Verified sender email">
                     <input type="text" id="admEmailFromName" class="multiplier-input" style="width:100%" placeholder="Sender name">
                     <input type="password" id="admBrevoKey" class="multiplier-input" style="width:100%" placeholder="Brevo API key (xkeysib-...)" autocomplete="new-password">
+                    <div id="admBrevoSmtpFields" style="display:none;grid-template-columns:1fr 1fr;gap:8px">
+                        <input type="text" id="admBrevoSmtpHost" class="multiplier-input" value="smtp-relay.brevo.com" placeholder="SMTP host">
+                        <input type="number" id="admBrevoSmtpPort" class="multiplier-input" value="587" min="1" max="65535" placeholder="SMTP port">
+                        <input type="text" id="admBrevoSmtpLogin" class="multiplier-input" placeholder="SMTP login (e.g. ...@smtp-brevo.com)">
+                        <input type="password" id="admBrevoSmtpKey" class="multiplier-input" placeholder="Brevo SMTP key" autocomplete="new-password">
+                    </div>
                     <input type="password" id="admMailjetKey" class="multiplier-input" style="display:none" autocomplete="new-password">
                     <input type="password" id="admMailjetSecret" class="multiplier-input" style="display:none" autocomplete="new-password">
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
@@ -3360,6 +3371,11 @@
                 const v=await response.json();
                 document.getElementById('admMailjetEnabled').checked=!!v.enabled;
                 document.getElementById('admEmailProvider').value='brevo';
+                document.getElementById('admBrevoTransport').value=v.brevo_transport||'api';
+                document.getElementById('admBrevoSmtpHost').value=v.brevo_smtp_host||'smtp-relay.brevo.com';
+                document.getElementById('admBrevoSmtpPort').value=v.brevo_smtp_port||587;
+                document.getElementById('admBrevoSmtpLogin').value=v.brevo_smtp_login||'';
+                toggleBrevoTransport();
                 document.getElementById('admNotifyBullish').checked=v.notify_bullish!==false;
                 document.getElementById('admNotifyBearish').checked=v.notify_bearish!==false;
                 document.getElementById('admNotifyNeutral').checked=!!v.notify_neutral;
@@ -3378,6 +3394,7 @@
                 document.getElementById('admMailjetFrom').value=v.from_email||'mcxalerts@webprobity.com';
                 document.getElementById('admEmailFromName').value=v.from_name||'NG Automation Bot';
                 document.getElementById('admBrevoKey').placeholder=v.brevo_api_key_set?'Saved Brevo key (blank keeps it)':'Brevo API key';
+                document.getElementById('admBrevoSmtpKey').placeholder=v.brevo_smtp_key_set?'Saved Brevo SMTP key (blank keeps it)':'Brevo SMTP key';
                 document.getElementById('admMailjetKey').placeholder=v.mailjet_api_key_set?'Saved Mailjet API key (blank keeps it)':'Mailjet API key';
                 document.getElementById('admMailjetSecret').placeholder=v.mailjet_secret_key_set?'Saved Mailjet secret (blank keeps it)':'Mailjet secret key';
                 loadEmailLogs();
@@ -3386,6 +3403,10 @@
         function toggleEmailDelayFields() {
             const delayed=document.getElementById('admEmailTiming').value==='custom_delay';
             document.getElementById('admEmailDelayFields').style.display=delayed?'grid':'none';
+        }
+        function toggleBrevoTransport() {
+            const smtp=document.getElementById('admBrevoTransport').value==='smtp';
+            document.getElementById('admBrevoSmtpFields').style.display=smtp?'grid':'none';
         }
         async function adminSaveMailjet(silent=false) {
             try {
@@ -3405,13 +3426,18 @@
                     delay_hours:document.getElementById('admEmailDelayHours').value,
                     delay_minutes:document.getElementById('admEmailDelayMinutes').value,
                     provider:document.getElementById('admEmailProvider').value,
+                    brevo_transport:document.getElementById('admBrevoTransport').value,
+                    brevo_smtp_host:document.getElementById('admBrevoSmtpHost').value,
+                    brevo_smtp_port:document.getElementById('admBrevoSmtpPort').value,
+                    brevo_smtp_login:document.getElementById('admBrevoSmtpLogin').value,
                     recipients:document.getElementById('admMailjetRecipients').value,from_email:document.getElementById('admMailjetFrom').value,
                     from_name:document.getElementById('admEmailFromName').value,
                     brevo_api_key:document.getElementById('admBrevoKey').value,
+                    brevo_smtp_key:document.getElementById('admBrevoSmtpKey').value,
                     mailjet_api_key:document.getElementById('admMailjetKey').value,
                     mailjet_secret_key:document.getElementById('admMailjetSecret').value})});
                 const result=await response.json(); if(!response.ok)throw new Error(result.message||'Could not save email settings');
-                ['admBrevoKey','admMailjetKey','admMailjetSecret'].forEach(id=>document.getElementById(id).value=''); if(!silent) alert(result.message); await loadMailjetSettings();
+                ['admBrevoKey','admBrevoSmtpKey','admMailjetKey','admMailjetSecret'].forEach(id=>document.getElementById(id).value=''); if(!silent) alert(result.message); await loadMailjetSettings();
             } catch(e) { if(!silent) alert(e.message); throw e; }
         }
         async function adminTestMailjet() {

@@ -2,7 +2,9 @@
 import json
 import os
 import re
+import smtplib
 import time
+from email.message import EmailMessage
 
 import requests
 import src.config as config
@@ -46,6 +48,11 @@ def load_provider_settings():
         # readable only for backward-compatible migration of old settings.
         "provider": "brevo",
         "brevo_api_key": saved.get("brevo_api_key") or os.getenv("BREVO_API_KEY", ""),
+        "brevo_transport": saved.get("brevo_transport", "api"),
+        "brevo_smtp_host": saved.get("brevo_smtp_host") or os.getenv("BREVO_SMTP_HOST", "smtp-relay.brevo.com"),
+        "brevo_smtp_port": int(saved.get("brevo_smtp_port") or os.getenv("BREVO_SMTP_PORT", "587")),
+        "brevo_smtp_login": saved.get("brevo_smtp_login") or os.getenv("BREVO_SMTP_LOGIN", ""),
+        "brevo_smtp_key": saved.get("brevo_smtp_key") or os.getenv("BREVO_SMTP_KEY", ""),
         "mailjet_api_key": saved.get("mailjet_api_key") or config.MAILJET_API_KEY or "",
         "mailjet_secret_key": saved.get("mailjet_secret_key") or config.MAILJET_SECRET_KEY or "",
         "from_email": saved.get("from_email") or config.MAILJET_FROM_EMAIL or DEFAULT_FROM_EMAIL,
@@ -71,11 +78,17 @@ def provider_status(settings=None):
     settings = settings or load_provider_settings()
     provider = "brevo"
     if provider == "brevo":
-        configured = bool(settings.get("brevo_api_key") and settings.get("from_email"))
+        if settings.get("brevo_transport") == "smtp":
+            configured = bool(settings.get("brevo_smtp_login") and settings.get("brevo_smtp_key") and settings.get("from_email"))
+        else:
+            configured = bool(settings.get("brevo_api_key") and settings.get("from_email"))
     else:
         configured = bool(settings.get("mailjet_api_key") and settings.get("mailjet_secret_key") and settings.get("from_email"))
     return {"configured": configured,
             "brevo_api_key_set": bool(settings.get("brevo_api_key")),
+            "brevo_smtp_login": settings.get("brevo_smtp_login", ""),
+            "brevo_smtp_key_set": bool(settings.get("brevo_smtp_key")),
+            "brevo_transport": settings.get("brevo_transport", "api"),
             "mailjet_api_key_set": bool(settings.get("mailjet_api_key")),
             "mailjet_secret_key_set": bool(settings.get("mailjet_secret_key"))}
 
@@ -96,6 +109,26 @@ def send_email_notification(subject, message, recipient, settings=None, alert_ty
     sender = {"email": settings["from_email"], "name": settings.get("from_name") or "NG Automation Bot"}
     try:
         if provider == "brevo":
+            if settings.get("brevo_transport") == "smtp":
+                if not (settings.get("brevo_smtp_login") and settings.get("brevo_smtp_key")):
+                    settings["_last_error"] = "Brevo SMTP login or SMTP key is not configured"
+                    settings["_last_status"] = "SKIPPED"
+                    _save_email_log(provider, subject, recipients, status, settings["_last_error"], alert_type)
+                    return False
+                email = EmailMessage()
+                email["From"] = f"{sender['name']} <{sender['email']}>"
+                email["To"] = ", ".join(recipients)
+                email["Subject"] = subject
+                email.set_content(message)
+                with smtplib.SMTP(settings.get("brevo_smtp_host", "smtp-relay.brevo.com"),
+                                  int(settings.get("brevo_smtp_port", 587)), timeout=15) as smtp:
+                    smtp.starttls()
+                    smtp.login(settings["brevo_smtp_login"], settings["brevo_smtp_key"])
+                    smtp.send_message(email)
+                settings["_last_status"] = "ACCEPTED"
+                _save_email_log(provider, subject, recipients, "ACCEPTED", None, alert_type,
+                                {"recipient_count": len(recipients or []), "transport": "smtp"})
+                return True
             if not settings.get("brevo_api_key"):
                 settings["_last_error"] = "Brevo API key is not configured"
                 settings["_last_status"] = "SKIPPED"

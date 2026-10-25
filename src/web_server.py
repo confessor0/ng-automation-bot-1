@@ -2477,6 +2477,10 @@ def admin_email_notifications():
                         "recipient": ", ".join(recipients),
                         "recipients": recipients,
                         "provider": "brevo",
+                        "brevo_transport": provider_settings.get("brevo_transport", "api"),
+                        "brevo_smtp_host": provider_settings.get("brevo_smtp_host", "smtp-relay.brevo.com"),
+                        "brevo_smtp_port": provider_settings.get("brevo_smtp_port", 587),
+                        "brevo_smtp_login": provider_settings.get("brevo_smtp_login", ""),
                         "from_email": provider_settings.get("from_email", ""),
                         "from_name": provider_settings.get("from_name", "NG Automation Bot"),
                         **provider_status(provider_settings)})
@@ -2505,10 +2509,23 @@ def admin_email_notifications():
         return jsonify({"status": "error", "message": "Choose immediate or custom delay delivery."}), 400
     if delivery_mode == "custom_delay" and delay_hours == 0 and delay_minutes == 0:
         return jsonify({"status": "error", "message": "Custom delay must be at least one minute."}), 400
+    try:
+        smtp_port = int(data.get("brevo_smtp_port", provider_settings.get("brevo_smtp_port", 587)))
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "Brevo SMTP port must be a number."}), 400
+    if not (1 <= smtp_port <= 65535):
+        return jsonify({"status": "error", "message": "Brevo SMTP port must be between 1 and 65535."}), 400
+    smtp_host = str(data.get("brevo_smtp_host", provider_settings.get("brevo_smtp_host", "smtp-relay.brevo.com"))).strip() or "smtp-relay.brevo.com"
+    smtp_login = str(data.get("brevo_smtp_login", provider_settings.get("brevo_smtp_login", ""))).strip()
+    transport = str(data.get("brevo_transport", provider_settings.get("brevo_transport", "api"))).lower()
+    if transport not in ("api", "smtp"):
+        return jsonify({"status": "error", "message": "Choose Brevo API or Brevo SMTP."}), 400
     provider_settings.update({"provider": provider, "from_email": from_email,
                               "recipients": recipients,
+                              "brevo_transport": transport, "brevo_smtp_host": smtp_host,
+                              "brevo_smtp_port": smtp_port, "brevo_smtp_login": smtp_login,
                               "from_name": str(data.get("from_name", provider_settings.get("from_name", "NG Automation Bot"))).strip() or "NG Automation Bot"})
-    secret_fields = ("brevo_api_key", "mailjet_api_key", "mailjet_secret_key")
+    secret_fields = ("brevo_api_key", "brevo_smtp_key", "mailjet_api_key", "mailjet_secret_key")
     for field in secret_fields:
         value = str(data.get(field, "")).strip()
         if value:
