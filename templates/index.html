@@ -342,6 +342,18 @@
         }
         .admin-grid > .card { min-width: 0; }
         .admin-wide { grid-column: 1 / -1 !important; }
+        .admin-grid .multiplier-input {
+            width: 100%; min-height: 40px; box-sizing: border-box;
+            padding: 9px 11px; border: 1px solid rgba(148,163,184,.28);
+            border-radius: 8px; background: rgba(15,23,42,.82);
+            color: #e2e8f0; font-size: 13px; font-weight: 500;
+            text-align: left; outline: none;
+        }
+        .admin-grid .multiplier-input:focus { border-color: #60a5fa; box-shadow: 0 0 0 3px rgba(59,130,246,.16); }
+        .admin-grid select.multiplier-input { appearance: auto; cursor: pointer; }
+        .admin-grid select.multiplier-input option { background: #0f172a; color: #e2e8f0; }
+        .admin-grid textarea.multiplier-input { resize: vertical; line-height: 1.4; }
+        .admin-grid input[type="checkbox"] { accent-color: #3b82f6; width: 16px; height: 16px; vertical-align: middle; }
         .admin-intro {
             display:flex; justify-content:space-between; align-items:flex-start; gap:18px;
             padding:20px 22px; margin-bottom:18px;
