@@ -2563,7 +2563,21 @@ def admin_email_notifications():
 def admin_email_notification_logs():
     from src.database import UnifiedOrderManager
     limit = request.args.get("limit", 100, type=int)
-    return jsonify({"logs": UnifiedOrderManager.get_instance().list_email_notification_logs(limit)})
+    logs = UnifiedOrderManager.get_instance().list_email_notification_logs(
+        limit, status=request.args.get("status"), alert_type=request.args.get("alert_type"),
+        search=request.args.get("search"))
+    return jsonify({"logs": logs})
+
+@app.route('/api/admin/email-notifications/health', methods=['GET'])
+@login_required
+@role_required("ADMIN")
+def admin_email_notification_health():
+    from src.database import UnifiedOrderManager
+    from src.notification_service import load_provider_settings, provider_status
+    settings = load_provider_settings()
+    health = UnifiedOrderManager.get_instance().email_notification_health()
+    return jsonify({"provider": "brevo", "transport": settings.get("brevo_transport", "api"),
+                    "configured": provider_status(settings).get("configured", False), **health})
 
 @app.route('/api/admin/email-notifications/test', methods=['POST'])
 @app.route('/api/admin/mailjet/test', methods=['POST'])

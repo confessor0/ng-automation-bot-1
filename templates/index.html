@@ -1735,7 +1735,13 @@
                         </div>
                     </div>
                     <div class="card" style="margin-top:8px;background:#0b1424">
-                        <div style="display:flex;justify-content:space-between;align-items:center"><strong>📨 Email delivery log</strong><button class="btn btn-secondary" onclick="loadEmailLogs()">Refresh</button></div>
+                        <div style="display:flex;justify-content:space-between;align-items:center"><strong>📨 Email delivery log</strong><button class="btn btn-secondary" onclick="loadEmailLogs();loadEmailHealth()">Refresh</button></div>
+                        <div id="admEmailHealth" style="display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:#94a3b8;margin:8px 0"></div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:6px;margin:6px 0">
+                            <select id="admEmailLogStatusFilter" class="multiplier-input" onchange="loadEmailLogs()"><option value="">All statuses</option><option>ACCEPTED</option><option>FAILED</option><option>SKIPPED</option></select>
+                            <select id="admEmailLogTypeFilter" class="multiplier-input" onchange="loadEmailLogs()"><option value="">All alert types</option><option>TEST</option><option>CONFIRMED_TREND_CHANGE</option><option>PROVISIONAL_REVERSAL</option><option>PROVISIONAL_NEUTRAL</option><option>WEAKENING</option><option>RECOVERY</option><option>DATA_QUALITY</option><option>RISK</option><option>EXPIRY</option></select>
+                            <input id="admEmailLogSearch" class="multiplier-input" placeholder="Search recipient, subject, or error" onkeydown="if(event.key==='Enter')loadEmailLogs()">
+                        </div>
                         <div id="admEmailLogStatus" style="font-size:11px;color:#94a3b8;margin:6px 0">No delivery attempts loaded.</div>
                         <div id="admEmailLogBody" style="overflow:auto;max-height:220px;font-size:11px"></div>
                     </div>
@@ -3428,7 +3434,7 @@
                 document.getElementById('admBrevoSmtpKey').placeholder=v.brevo_smtp_key_set?'Saved Brevo SMTP key (blank keeps it)':'Brevo SMTP key';
                 document.getElementById('admMailjetKey').placeholder=v.mailjet_api_key_set?'Saved Mailjet API key (blank keeps it)':'Mailjet API key';
                 document.getElementById('admMailjetSecret').placeholder=v.mailjet_secret_key_set?'Saved Mailjet secret (blank keeps it)':'Mailjet secret key';
-                loadEmailLogs();
+                loadEmailLogs(); loadEmailHealth();
             } catch(e) { console.error('Could not load email notification settings:',e); }
         }
         function toggleEmailDelayFields() {
@@ -3488,11 +3494,20 @@
             const status=document.getElementById('admEmailLogStatus'), body=document.getElementById('admEmailLogBody');
             if(!status||!body)return;
             try {
-                const r=await fetch('/api/admin/email-notifications/logs?limit=100'); const d=await r.json();
+                const qs=new URLSearchParams({limit:'100'}); const st=document.getElementById('admEmailLogStatusFilter')?.value, typ=document.getElementById('admEmailLogTypeFilter')?.value, search=document.getElementById('admEmailLogSearch')?.value;
+                if(st)qs.set('status',st); if(typ)qs.set('alert_type',typ); if(search)qs.set('search',search);
+                const r=await fetch('/api/admin/email-notifications/logs?'+qs.toString()); const d=await r.json();
                 if(!r.ok)throw new Error(d.message||'Could not load email logs');
                 const logs=d.logs||[]; status.textContent=logs.length?`${logs.length} recent delivery attempts`:'No delivery attempts recorded.';
                 body.innerHTML=logs.length?`<table style="width:100%;border-collapse:collapse"><thead><tr><th align="left">Time (IST)</th><th align="left">Status</th><th align="left">Provider</th><th align="left">Recipients</th><th align="left">Subject</th><th align="left">Error</th></tr></thead><tbody>${logs.map(x=>`<tr><td>${new Date(x.sent_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})}</td><td style="color:${(x.status==='SENT'||x.status==='ACCEPTED')?'#10b981':x.status==='FAILED'?'#ef4444':'#fbbf24'}">${x.status}</td><td>${x.provider||''}</td><td>${(x.recipients||[]).join(', ')}</td><td>${x.subject||''}</td><td>${x.error||''}</td></tr>`).join('')}</tbody></table>`:'';
             } catch(e) { status.textContent=e.message; }
+        }
+        async function loadEmailHealth() {
+            const el=document.getElementById('admEmailHealth'); if(!el)return;
+            try { const r=await fetch('/api/admin/email-notifications/health'); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Health unavailable');
+                const latest=d.latest?.status||'NONE', last=d.last_success?.sent_at||'Never', fail=d.last_failure?.error||'None';
+                el.innerHTML=`<span>Provider: <b style="color:#60a5fa">${d.provider||'-'} / ${d.transport||'-'}</b></span><span>Configured: <b style="color:${d.configured?'#10b981':'#ef4444'}">${d.configured?'YES':'NO'}</b></span><span>Accepted: <b style="color:#10b981">${d.accepted||0}</b></span><span>Failed: <b style="color:#ef4444">${d.failed||0}</b></span><span>Latest: <b>${latest}</b></span><span>Last success: ${last}</span><span>Last error: ${fail}</span>`;
+            } catch(e) { el.textContent=e.message; }
         }
 
         function adminUpdateConfig() {

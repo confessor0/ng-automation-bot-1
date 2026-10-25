@@ -432,12 +432,20 @@ class UnifiedOrderManager:
                   json.dumps(metadata or {})))
             conn.commit()
 
-    def list_email_notification_logs(self, limit=100):
+    def list_email_notification_logs(self, limit=100, status=None, alert_type=None, search=None):
         with sqlite3.connect(self.DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
-            rows = [dict(row) for row in conn.execute(
-                "SELECT * FROM email_notification_logs ORDER BY id DESC LIMIT ?",
-                (max(1, min(int(limit or 100), 500)),)).fetchall()]
+            where, params = [], []
+            if status:
+                where.append("status = ?"); params.append(str(status).upper())
+            if alert_type:
+                where.append("alert_type = ?"); params.append(str(alert_type).upper())
+            if search:
+                where.append("(subject LIKE ? OR recipients LIKE ? OR error LIKE ?)")
+                needle = f"%{search}%"; params.extend([needle, needle, needle])
+            query = "SELECT * FROM email_notification_logs" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY id DESC LIMIT ?"
+            params.append(max(1, min(int(limit or 100), 500)))
+            rows = [dict(row) for row in conn.execute(query, params).fetchall()]
         for row in rows:
             for key in ("recipients", "metadata"):
                 try:
@@ -445,6 +453,27 @@ class UnifiedOrderManager:
                 except (TypeError, ValueError):
                     pass
         return rows
+
+    def email_notification_health(self):
+        """Return delivery counters and the latest accepted/failed attempts."""
+        with sqlite3.connect(self.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            total = conn.execute("SELECT COUNT(*) AS n FROM email_notification_logs").fetchone()["n"]
+            accepted = conn.execute("SELECT COUNT(*) AS n FROM email_notification_logs WHERE status = 'ACCEPTED'").fetchone()["n"]
+            failed = conn.execute("SELECT COUNT(*) AS n FROM email_notification_logs WHERE status = 'FAILED'").fetchone()["n"]
+            skipped = conn.execute("SELECT COUNT(*) AS n FROM email_notification_logs WHERE status = 'SKIPPED'").fetchone()["n"]
+            latest = conn.execute("SELECT * FROM email_notification_logs ORDER BY id DESC LIMIT 1").fetchone()
+            last_success = conn.execute("SELECT * FROM email_notification_logs WHERE status = 'ACCEPTED' ORDER BY id DESC LIMIT 1").fetchone()
+            last_failure = conn.execute("SELECT * FROM email_notification_logs WHERE status = 'FAILED' ORDER BY id DESC LIMIT 1").fetchone()
+        def clean(row):
+            if not row: return None
+            item = dict(row)
+            for key in ("recipients", "metadata"):
+                try: item[key] = json.loads(item[key] or ("[]" if key == "recipients" else "{}"))
+                except (TypeError, ValueError): pass
+            return item
+        return {"total": total, "accepted": accepted, "failed": failed, "skipped": skipped,
+                "latest": clean(latest), "last_success": clean(last_success), "last_failure": clean(last_failure)}
 
     def save_scan_run(self, scan_id, symbol, days_requested, from_date,
                       to_date, status, summary):
