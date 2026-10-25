@@ -47,9 +47,10 @@ def load_provider_settings():
     saved_smtp_login = saved.get("brevo_smtp_login") or os.getenv("BREVO_SMTP_LOGIN", "")
     saved_smtp_key = saved.get("brevo_smtp_key") or os.getenv("BREVO_SMTP_KEY", "")
     saved_api_key = saved.get("brevo_api_key") or os.getenv("BREVO_API_KEY", "")
-    # An SMTP credential must never be sent to the HTTP API. Prefer SMTP when
-    # SMTP credentials exist and no Brevo API key is configured.
-    if transport == "api" and saved_smtp_login and saved_smtp_key and not saved_api_key:
+    # An SMTP credential must never be sent to the HTTP API. If SMTP
+    # credentials are present, always use SMTP even when an old API key is
+    # still stored in the environment or on the volume.
+    if saved_smtp_login and saved_smtp_key:
         transport = "smtp"
     return {
         # Brevo is the active transactional provider. Mailjet fields remain
@@ -130,9 +131,17 @@ def send_email_notification(subject, message, recipient, settings=None, alert_ty
                 email.set_content(message)
                 host = settings.get("brevo_smtp_host", "smtp-relay.brevo.com")
                 requested_port = int(settings.get("brevo_smtp_port", 587))
-                ports = [requested_port] + ([2525] if requested_port == 587 else [])
+                # Brevo documents 587/2525 for STARTTLS and 465 for SSL.
+                # Railway deployments can have intermittent routing issues on
+                # one port, so try the supported alternatives before failing.
+                ports = []
+                for candidate in (requested_port, 2525, 465):
+                    if candidate not in ports:
+                        ports.append(candidate)
                 last_error = None
+                attempted = []
                 for port in ports:
+                    attempted.append(port)
                     try:
                         if port == 465:
                             connection = smtplib.SMTP_SSL(host, port, timeout=15)
@@ -148,7 +157,11 @@ def send_email_notification(subject, message, recipient, settings=None, alert_ty
                     except (TimeoutError, OSError, smtplib.SMTPException) as exc:
                         last_error = exc
                         if port == ports[-1]:
-                            raise
+                            raise RuntimeError(
+                                f"Brevo SMTP connection failed on {host} ports "
+                                f"{', '.join(str(item) for item in attempted)}: "
+                                f"{type(exc).__name__}"
+                            ) from exc
                 if last_error:
                     raise last_error
                 settings["_last_status"] = "ACCEPTED"
