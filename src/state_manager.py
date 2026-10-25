@@ -100,6 +100,31 @@ class UserManager:
         self.save_users()
         return True, "Password updated"
 
+    def public_users(self):
+        return [{k: v for k, v in user.items() if k != "password"} for user in self.users.values()]
+
+    def create_or_update_user(self, username, name, email, role, password=None, active=True):
+        username = str(username or "").strip().lower()
+        if not username or role not in ROLES:
+            return False, "Username and a valid role are required"
+        if username not in self.users and len(str(password or "")) < 6:
+            return False, "A new user requires a password of at least 6 characters"
+        current = self.users.get(username, {"id": "u_" + uuid.uuid4().hex[:10]})
+        current.update({"name": str(name or username).strip(), "email": str(email or "").strip(),
+                        "role": role, "active": bool(active)})
+        if password:
+            current["password"] = str(password)
+        current.setdefault("last_login", None)
+        self.users[username] = current
+        self.save_users()
+        return True, "User saved"
+
+    def set_user_active(self, username, active):
+        if username not in self.users: return False
+        self.users[username]["active"] = bool(active)
+        self.save_users()
+        return True
+
 class StateManager:
     _instance = None
     _lock = threading.Lock() # Class-level lock for singleton creation

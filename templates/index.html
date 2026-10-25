@@ -1749,6 +1749,25 @@
             </div>
 
 
+            <div class="card admin-wide">
+                <div class="card-title">🧩 Strategy Versions & Administration</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                    <input id="admStrategyVersionName" class="multiplier-input" placeholder="Version name">
+                    <button class="btn btn-primary" onclick="saveStrategyVersion()">Save Current Strategy Version</button>
+                    <select id="admStrategyVersionList" class="multiplier-input"><option value="">Select saved version</option></select>
+                    <button class="btn btn-secondary" onclick="restoreStrategyVersion()">Restore Selected Version</button>
+                </div>
+                <div style="border-top:1px solid #1e293b;margin-top:12px;padding-top:12px;display:grid;grid-template-columns:repeat(5,1fr);gap:6px">
+                    <input id="admUserName" class="multiplier-input" placeholder="Username">
+                    <input id="admUserDisplay" class="multiplier-input" placeholder="Name">
+                    <input id="admUserEmail" class="multiplier-input" placeholder="Email">
+                    <select id="admUserRole" class="multiplier-input"><option>VIEWER</option><option>OPERATOR</option><option>RISK_MANAGER</option><option>ADMIN</option></select>
+                    <input id="admUserPassword" type="password" class="multiplier-input" placeholder="Password (new user)">
+                </div>
+                <button class="btn btn-secondary" style="margin-top:8px" onclick="saveAdminUser()">Save User</button>
+                <div id="admUsersList" style="font-size:11px;color:#94a3b8;margin-top:8px"></div>
+            </div>
+
             <!-- 2. Governance & Limits -->
             <div class="card">
                 <div class="card-title">📏 Risk Parameters (Configurable)</div>
@@ -3509,6 +3528,19 @@
                 el.innerHTML=`<span>Provider: <b style="color:#60a5fa">${d.provider||'-'} / ${d.transport||'-'}</b></span><span>Configured: <b style="color:${d.configured?'#10b981':'#ef4444'}">${d.configured?'YES':'NO'}</b></span><span>Accepted: <b style="color:#10b981">${d.accepted||0}</b></span><span>Failed: <b style="color:#ef4444">${d.failed||0}</b></span><span>Latest: <b>${latest}</b></span><span>Last success: ${last}</span><span>Last error: ${fail}</span>`;
             } catch(e) { el.textContent=e.message; }
         }
+        async function loadStrategyVersions() {
+            try { const r=await fetch('/api/admin/strategy-versions'); const d=await r.json(); const el=document.getElementById('admStrategyVersionList'); if(el)el.innerHTML='<option value="">Select saved version</option>'+(d.versions||[]).map(v=>`<option value="${v.id}">${v.name||v.id} · ${new Date(v.created_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})}</option>`).join(''); } catch(e) { console.error(e); }
+        }
+        async function saveStrategyVersion() {
+            const r=await fetch('/api/admin/strategy-versions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:document.getElementById('admStrategyVersionName').value,config:{}})}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Could not save version'); alert('Strategy version saved'); loadStrategyVersions();
+        }
+        async function restoreStrategyVersion() {
+            const id=document.getElementById('admStrategyVersionList').value; if(!id)return alert('Select a version first'); if(!confirm('Restore this strategy configuration?'))return; const r=await fetch('/api/admin/strategy-versions/'+encodeURIComponent(id)+'/restore',{method:'POST'}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Could not restore version'); alert('Strategy version restored'); updateDashboard();
+        }
+        async function saveAdminUser() {
+            const body={username:document.getElementById('admUserName').value,name:document.getElementById('admUserDisplay').value,email:document.getElementById('admUserEmail').value,role:document.getElementById('admUserRole').value,password:document.getElementById('admUserPassword').value}; const r=await fetch('/api/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Could not save user'); alert('User saved'); loadAdminUsers();
+        }
+        async function loadAdminUsers() { try { const r=await fetch('/api/admin/users'); const d=await r.json(); const el=document.getElementById('admUsersList'); if(el)el.innerHTML=(d.users||[]).map(u=>`${u.name||u.id} (${u.role}) · ${u.active?'ACTIVE':'DISABLED'} · ${u.email||''}`).join('<br>'); } catch(e) { console.error(e); } }
 
         function adminUpdateConfig() {
             const data = {
@@ -3631,7 +3663,7 @@
         setInterval(updateClock, 1000);
 
         updateClock();
-        loadMailjetSettings();
+        loadMailjetSettings(); loadStrategyVersions(); loadAdminUsers();
         checkFyersCredentialStatus();
 
 

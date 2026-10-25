@@ -15,6 +15,7 @@ from src.config import TIMEZONE
 from colorama import Fore, Style
 import os
 import secrets
+import json
 
 # Fix template path
 # Use CWD (Current Working Directory) assumption since we run from root
@@ -2349,6 +2350,90 @@ def export_logs_csv():
     )
 
 # --- ADMIN API ENDPOINTS ---
+def _admin_version_file():
+    base = os.getenv("TRADING_DB_DIR") or ("/data" if os.path.isdir("/data") else os.getcwd())
+    return os.path.join(base, "strategy_config_versions.json")
+
+def _read_strategy_versions():
+    try:
+        with open(_admin_version_file(), "r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return []
+
+def _write_strategy_versions(items):
+    path = _admin_version_file(); temp = path + ".tmp"
+    with open(temp, "w", encoding="utf-8") as handle: json.dump(items, handle, indent=2)
+    os.replace(temp, path)
+
+@app.route('/api/admin/strategy-versions', methods=['GET', 'POST'])
+@login_required
+@role_required("ADMIN")
+def admin_strategy_versions():
+    state_mgr = StateManager.get_instance()
+    versions = _read_strategy_versions()
+    if request.method == 'GET':
+        return jsonify({"versions": versions, "active": state_mgr.get_state().get("admin_config", {})})
+    data = request.get_json(silent=True) or {}
+    config = dict(state_mgr.get_state().get("admin_config", {}))
+    supplied = data.get("config") or {}
+    for key in config:
+        if key in supplied: config[key] = supplied[key]
+    version = {"id": "CFG_" + secrets.token_hex(6).upper(), "created_at": datetime.now(TIMEZONE).isoformat(),
+               "created_by": session.get("username"), "name": str(data.get("name") or "Strategy configuration").strip(), "config": config}
+    versions.insert(0, version); _write_strategy_versions(versions[:100])
+    state_mgr.update("admin_config", config)
+    state_mgr.add_log(f"Strategy configuration version saved: {version['id']}", category="ADMIN", user=session.get('username'))
+    return jsonify({"status": "success", "version": version})
+
+@app.route('/api/admin/strategy-versions/<version_id>/restore', methods=['POST'])
+@login_required
+@role_required("ADMIN")
+def restore_strategy_version(version_id):
+    versions = _read_strategy_versions(); item = next((v for v in versions if v.get("id") == version_id), None)
+    if not item: return jsonify({"status": "error", "message": "Configuration version not found"}), 404
+    state_mgr = StateManager.get_instance(); state_mgr.update("admin_config", item.get("config", {}))
+    state_mgr.add_log(f"Strategy configuration restored: {version_id}", category="ADMIN", user=session.get('username'))
+    return jsonify({"status": "success", "config": item.get("config", {})})
+
+@app.route('/api/admin/users', methods=['GET', 'POST'])
+@login_required
+@role_required("ADMIN")
+def admin_users():
+    manager = StateManager.get_instance().user_manager
+    if request.method == 'GET': return jsonify({"users": manager.public_users(), "roles": list(manager.users.get(session.get('username'), {}).get('role') and ROLES.keys() or [])})
+    data = request.get_json(silent=True) or {}
+    ok, message = manager.create_or_update_user(data.get("username"), data.get("name"), data.get("email"), data.get("role", "VIEWER"), data.get("password"), data.get("active", True))
+    if not ok: return jsonify({"status": "error", "message": message}), 400
+    StateManager.get_instance().add_log(f"User updated: {str(data.get('username')).lower()}", category="AUTH", user=session.get('username'))
+    return jsonify({"status": "success", "message": message})
+
+@app.route('/api/admin/users/<username>/status', methods=['POST'])
+@login_required
+@role_required("ADMIN")
+def admin_user_status(username):
+    ok = StateManager.get_instance().user_manager.set_user_active(username, bool((request.get_json(silent=True) or {}).get("active")))
+    if not ok: return jsonify({"status": "error", "message": "User not found"}), 404
+    return jsonify({"status": "success"})
+
+@app.route('/api/admin/audit', methods=['GET'])
+@login_required
+@role_required("ADMIN")
+def admin_audit_center():
+    db = __import__('src.database', fromlist=['UnifiedOrderManager']).UnifiedOrderManager.get_instance()
+    limit = request.args.get("limit", 200, type=int)
+    return jsonify({"logs": StateManager.get_instance().get_logs()[:limit], "strategy_events": db.list_strategy_events(limit=limit)})
+
+@app.route('/api/admin/backup', methods=['GET'])
+@login_required
+@role_required("ADMIN")
+def admin_backup():
+    state = StateManager.get_instance().get_state()
+    safe_state = {k: v for k, v in state.items() if k not in ("credentials", "tokens")}
+    safe_settings = __import__('src.notification_service', fromlist=['load_provider_settings']).load_provider_settings()
+    for key in ("brevo_api_key", "brevo_smtp_key", "mailjet_api_key", "mailjet_secret_key"): safe_settings[key] = "[REDACTED]"
+    return jsonify({"created_at": datetime.now(TIMEZONE).isoformat(), "state": safe_state, "notifications": safe_settings, "strategy_versions": _read_strategy_versions()})
+
 @app.route('/api/admin/update_config', methods=['POST'])
 @login_required
 @role_required("ADMIN") # Enforce Admin Role
