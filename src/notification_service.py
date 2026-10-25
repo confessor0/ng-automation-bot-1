@@ -43,16 +43,24 @@ def load_provider_settings():
             break
         except (OSError, ValueError):
             continue
+    transport = saved.get("brevo_transport", "api")
+    saved_smtp_login = saved.get("brevo_smtp_login") or os.getenv("BREVO_SMTP_LOGIN", "")
+    saved_smtp_key = saved.get("brevo_smtp_key") or os.getenv("BREVO_SMTP_KEY", "")
+    saved_api_key = saved.get("brevo_api_key") or os.getenv("BREVO_API_KEY", "")
+    # An SMTP credential must never be sent to the HTTP API. Prefer SMTP when
+    # SMTP credentials exist and no Brevo API key is configured.
+    if transport == "api" and saved_smtp_login and saved_smtp_key and not saved_api_key:
+        transport = "smtp"
     return {
         # Brevo is the active transactional provider. Mailjet fields remain
         # readable only for backward-compatible migration of old settings.
         "provider": "brevo",
-        "brevo_api_key": saved.get("brevo_api_key") or os.getenv("BREVO_API_KEY", ""),
-        "brevo_transport": saved.get("brevo_transport", "api"),
+        "brevo_api_key": saved_api_key,
+        "brevo_transport": transport,
         "brevo_smtp_host": saved.get("brevo_smtp_host") or os.getenv("BREVO_SMTP_HOST", "smtp-relay.brevo.com"),
         "brevo_smtp_port": int(saved.get("brevo_smtp_port") or os.getenv("BREVO_SMTP_PORT", "587")),
-        "brevo_smtp_login": saved.get("brevo_smtp_login") or os.getenv("BREVO_SMTP_LOGIN", ""),
-        "brevo_smtp_key": saved.get("brevo_smtp_key") or os.getenv("BREVO_SMTP_KEY", ""),
+        "brevo_smtp_login": saved_smtp_login,
+        "brevo_smtp_key": saved_smtp_key,
         "mailjet_api_key": saved.get("mailjet_api_key") or config.MAILJET_API_KEY or "",
         "mailjet_secret_key": saved.get("mailjet_secret_key") or config.MAILJET_SECRET_KEY or "",
         "from_email": saved.get("from_email") or config.MAILJET_FROM_EMAIL or DEFAULT_FROM_EMAIL,
