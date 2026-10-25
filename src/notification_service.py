@@ -8,7 +8,9 @@ import requests
 import src.config as config
 
 
-SETTINGS_FILE = os.path.join(os.getcwd(), "email_notification_config.json")
+_settings_dir = os.getenv("TRADING_DB_DIR") or ("/data" if os.path.isdir("/data") else os.getcwd())
+SETTINGS_FILE = os.path.join(_settings_dir, "email_notification_config.json")
+LEGACY_SETTINGS_FILE = os.path.join(os.getcwd(), "email_notification_config.json")
 DEFAULT_FROM_EMAIL = "mcxalerts@webprobity.com"
 
 
@@ -29,11 +31,16 @@ def normalize_recipients(value):
 
 def load_provider_settings():
     """Load saved provider secrets, falling back to environment variables."""
-    try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as settings_file:
-            saved = json.load(settings_file)
-    except (OSError, ValueError):
-        saved = {}
+    saved = {}
+    for path in (SETTINGS_FILE, LEGACY_SETTINGS_FILE):
+        if path == SETTINGS_FILE and not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as settings_file:
+                saved = json.load(settings_file)
+            break
+        except (OSError, ValueError):
+            continue
     return {
         "provider": saved.get("provider", "mailjet"),
         "brevo_api_key": saved.get("brevo_api_key") or os.getenv("BREVO_API_KEY", ""),
