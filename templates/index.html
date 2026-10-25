@@ -3387,7 +3387,7 @@
             const delayed=document.getElementById('admEmailTiming').value==='custom_delay';
             document.getElementById('admEmailDelayFields').style.display=delayed?'grid':'none';
         }
-        async function adminSaveMailjet() {
+        async function adminSaveMailjet(silent=false) {
             try {
                 const response=await fetch('/api/admin/email-notifications',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
                     enabled:document.getElementById('admMailjetEnabled').checked,notify_trends:true,
@@ -3411,11 +3411,11 @@
                     mailjet_api_key:document.getElementById('admMailjetKey').value,
                     mailjet_secret_key:document.getElementById('admMailjetSecret').value})});
                 const result=await response.json(); if(!response.ok)throw new Error(result.message||'Could not save email settings');
-                ['admBrevoKey','admMailjetKey','admMailjetSecret'].forEach(id=>document.getElementById(id).value=''); alert(result.message); loadMailjetSettings();
-            } catch(e) { alert(e.message); }
+                ['admBrevoKey','admMailjetKey','admMailjetSecret'].forEach(id=>document.getElementById(id).value=''); if(!silent) alert(result.message); await loadMailjetSettings();
+            } catch(e) { if(!silent) alert(e.message); throw e; }
         }
         async function adminTestMailjet() {
-            try { const r=await fetch('/api/admin/email-notifications/test',{method:'POST'}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Email test failed'); alert(d.message); }
+            try { await adminSaveMailjet(true); const r=await fetch('/api/admin/email-notifications/test',{method:'POST'}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Email test failed'); alert(d.message); }
             catch(e) { alert(e.message); }
         }
         async function loadEmailLogs() {
