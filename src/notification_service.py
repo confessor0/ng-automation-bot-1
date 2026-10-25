@@ -128,14 +128,32 @@ def send_email_notification(subject, message, recipient, settings=None, alert_ty
                 email["To"] = ", ".join(recipients)
                 email["Subject"] = subject
                 email.set_content(message)
-                with smtplib.SMTP(settings.get("brevo_smtp_host", "smtp-relay.brevo.com"),
-                                  int(settings.get("brevo_smtp_port", 587)), timeout=15) as smtp:
-                    smtp.starttls()
-                    smtp.login(settings["brevo_smtp_login"], settings["brevo_smtp_key"])
-                    smtp.send_message(email)
+                host = settings.get("brevo_smtp_host", "smtp-relay.brevo.com")
+                requested_port = int(settings.get("brevo_smtp_port", 587))
+                ports = [requested_port] + ([2525] if requested_port == 587 else [])
+                last_error = None
+                for port in ports:
+                    try:
+                        if port == 465:
+                            connection = smtplib.SMTP_SSL(host, port, timeout=15)
+                        else:
+                            connection = smtplib.SMTP(host, port, timeout=15)
+                        with connection as smtp:
+                            if port != 465:
+                                smtp.starttls()
+                            smtp.login(settings["brevo_smtp_login"], settings["brevo_smtp_key"])
+                            smtp.send_message(email)
+                        last_error = None
+                        break
+                    except (TimeoutError, OSError, smtplib.SMTPException) as exc:
+                        last_error = exc
+                        if port == ports[-1]:
+                            raise
+                if last_error:
+                    raise last_error
                 settings["_last_status"] = "ACCEPTED"
                 _save_email_log(provider, subject, recipients, "ACCEPTED", None, alert_type,
-                                {"recipient_count": len(recipients or []), "transport": "smtp"})
+                                {"recipient_count": len(recipients or []), "transport": "smtp", "port": port})
                 return True
             if not settings.get("brevo_api_key"):
                 settings["_last_error"] = "Brevo API key is not configured"
