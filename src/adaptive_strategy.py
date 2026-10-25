@@ -67,12 +67,14 @@ def build_recommendation(
     # protected ATM straddle. The hedge strikes are derived from live premiums.
     use_consolidation = bool(consolidation) or (trend == "NEUTRAL")
     if use_consolidation:
-        if not premiums_available:
-            return _wait("STRATEGY_2", "ATM CE and PE premiums are required to calculate protective hedge strikes.", cmp, atm_strike, expiry, signal_status)
+        # Keep a reviewable neutral basket visible even when quotes are not
+        # available. The fallback ±8 intervals is explicitly non-executable;
+        # live premiums must replace it before validation can pass.
         combined_premium = ce_premium + pe_premium
-        put_strike = _round_strike(atm_strike - combined_premium, option_interval)
-        call_strike = _round_strike(atm_strike + combined_premium, option_interval)
-        hedge_valid = put_strike < atm_strike and call_strike > atm_strike
+        hedge_distance = combined_premium if premiums_available else 8 * option_interval
+        put_strike = _round_strike(atm_strike - hedge_distance, option_interval)
+        call_strike = _round_strike(atm_strike + hedge_distance, option_interval)
+        hedge_valid = premiums_available and put_strike < atm_strike and call_strike > atm_strike
         if not hedge_valid:
             # Keep a reviewable basket visible even when current premiums are
             # too large for a valid S ± premium strike. These are placeholders
@@ -95,6 +97,7 @@ def build_recommendation(
             "rationale": (("Both ATM option closes are below MA9; protected consolidation basket."
                            if futures_confirmation != "CONSOLIDATION"
                            else "Range-bound options action with a protected ATM straddle.")
+                          + (" ATM premiums are missing; fallback wings are shown for review and execution remains blocked." if not premiums_available else "")
                           + (" Dynamic premium hedge strikes are invalid at current premiums; review fallback wings before execution." if not hedge_valid else "")),
             "market_context": {"current_price": cmp, "atm_strike": atm_strike, "expiry": expiry, "combined_premium": round(combined_premium, 4), "hedge_rule": "S ± (ATM CE + ATM PE), rounded to valid strike"},
             "legs": legs,

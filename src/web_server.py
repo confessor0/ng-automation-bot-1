@@ -1841,13 +1841,231 @@ def _simulation_risk_warnings(legs):
     return warnings
 
 
+@app.route('/api/simulator/context', methods=['GET'])
+@login_required
+def get_simulator_context():
+    """Return the current decision context without changing broker state."""
+    from src.instrument_config import get_instrument_config
+    from src.utils import construct_symbol, get_atm_strike, get_next_expiry_symbol_suffix
+    symbol = str(request.args.get('symbol') or 'NATGASMINI').upper()
+    state = state_mgr.get_state()
+    recommendation = state.get('recommended_position') or {}
+    market = recommendation.get('market_context') or {}
+    price = market.get('current_price') or state.get('market_data', {}).get('ltp') or state.get('ltp')
+    try:
+        price = float(price or 0)
+    except (TypeError, ValueError):
+        price = 0.0
+    atm = market.get('atm_strike') or state.get('atm_strike') or get_atm_strike(price, symbol)
+    expiry = str(market.get('expiry') or state.get('expiry') or get_next_expiry_symbol_suffix(symbol=symbol)).upper()
+    config = get_instrument_config(symbol)
+    expiry_at = None
+    try:
+        from calendar import month_abbr
+        expiry_date = datetime(2000 + int(expiry[:2]), list(month_abbr).index(expiry[2:5].title()),
+                               int(config.get('expiry_day', 24)), 23, 30)
+        expiry_at = TIMEZONE.localize(expiry_date).isoformat() if hasattr(TIMEZONE, 'localize') else expiry_date.replace(tzinfo=TIMEZONE).isoformat()
+    except (ValueError, IndexError):
+        pass
+    return jsonify({
+        'status': 'success', 'symbol': symbol, 'underlying_price': price,
+        'atm_strike': atm, 'expiry': expiry, 'expiry_at': expiry_at, 'lot_size': config.get('lot_size'),
+        'strike_interval': config.get('strike_interval'),
+        'contracts': {
+            'future': construct_symbol(symbol, 'FUT', expiry),
+            'atm_ce': construct_symbol(symbol, 'OPT', expiry, atm, 'CE') if atm else None,
+            'atm_pe': construct_symbol(symbol, 'OPT', expiry, atm, 'PE') if atm else None,
+        },
+        'recommendation': recommendation,
+        'calculation_models': ['EXPIRY', 'TARGET_DATE', 'MANUAL_EXIT'],
+        'strategy_version': 'CANONICAL_V1',
+    })
+
+
+@app.route('/api/simulator/preset', methods=['POST'])
+@login_required
+def build_simulator_preset():
+    """Build simulator presets from the same canonical recommendation builder."""
+    from src.adaptive_strategy import build_recommendation
+    from src.instrument_config import get_instrument_config
+    from src.utils import construct_symbol, get_atm_strike, get_next_expiry_symbol_suffix
+    data = request.get_json(silent=True) or {}
+    symbol = str(data.get('symbol') or 'NATGASMINI').upper()
+    trend = str(data.get('trend') or 'NEUTRAL').upper()
+    price = float(data.get('underlying_price') or 0)
+    config = get_instrument_config(symbol)
+    interval = int(config.get('strike_interval', 5))
+    atm = int(float(data.get('atm_strike') or get_atm_strike(price, symbol)))
+    expiry = str(data.get('expiry') or get_next_expiry_symbol_suffix(symbol=symbol)).upper()
+    premium_by_symbol = {}
+    ce_symbol = construct_symbol(symbol, 'OPT', expiry, atm, 'CE')
+    pe_symbol = construct_symbol(symbol, 'OPT', expiry, atm, 'PE')
+    premium_by_symbol[ce_symbol] = float(data.get('atm_ce_price') or 0)
+    premium_by_symbol[pe_symbol] = float(data.get('atm_pe_price') or 0)
+    recommendation = build_recommendation(
+        trend=trend, signal_status='SIMULATOR_PRESET', cmp=price,
+        atm_strike=atm, expiry=expiry, option_interval=interval,
+        quote=lambda item: float(premium_by_symbol.get(item) or 0),
+        symbol_builder=lambda base, kind, item_expiry, strike, option_type: construct_symbol(
+            symbol, kind, item_expiry, strike, option_type),
+        consolidation=trend in ('NEUTRAL', 'CONSOLIDATION'),
+    )
+    return jsonify({'status': 'success', 'strategy_version': 'CANONICAL_V1',
+                    'symbol': symbol, 'lot_size': config.get('lot_size'),
+                    'recommendation': recommendation})
+
+
+@app.route('/api/simulator/quotes', methods=['POST'])
+@login_required
+def get_simulator_quotes():
+    """Read quotes through the existing broker session; never places orders."""
+    data = request.get_json(silent=True) or {}
+    symbols = [str(value).strip() for value in (data.get('symbols') or []) if str(value).strip()]
+    symbols = list(dict.fromkeys(symbols))[:30]
+    if not symbols:
+        return jsonify({'status': 'error', 'message': 'At least one contract symbol is required'}), 400
+    try:
+        broker = ensure_broker_connected()
+        if not broker:
+            return jsonify({'status': 'error', 'message': 'Existing Fyers session is not connected'}), 503
+        values = broker.get_quotes(symbols) or {}
+        now = datetime.now(TIMEZONE).isoformat()
+        return jsonify({'status': 'success', 'quoted_at': now,
+                        'quotes': {symbol: {'ltp': values.get(symbol), 'source': 'LIVE_LTP',
+                                            'timestamp': now, 'available': values.get(symbol) is not None}
+                                   for symbol in symbols}})
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': f'Quote refresh failed: {exc}'}), 502
+
+
+@app.route('/api/simulator/calculate', methods=['POST'])
+@login_required
+def calculate_simulator():
+    from src.simulation_engine import calculate
+    data = request.get_json(silent=True) or {}
+    try:
+        at, _ = _parse_simulation_time(data.get('as_of'), 'as_of')
+        expiry, _ = _parse_simulation_time(data.get('expiry'), 'expiry')
+        if expiry < at and str(data.get('mode') or '').upper() != 'EXPIRY':
+            raise ValueError('expiry must be after the evaluation time')
+        return jsonify({'status': 'success', 'result': calculate(data, at, expiry)})
+    except (TypeError, ValueError) as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 400
+
+
+@app.route('/api/simulator/scenario', methods=['POST'])
+@login_required
+def calculate_simulator_scenario():
+    from src.simulation_engine import scenario_surface
+    data = request.get_json(silent=True) or {}
+    try:
+        at, _ = _parse_simulation_time(data.get('as_of'), 'as_of')
+        expiry, _ = _parse_simulation_time(data.get('expiry'), 'expiry')
+        if expiry <= at:
+            raise ValueError('expiry must be after the evaluation time')
+        return jsonify({'status': 'success', 'result': scenario_surface(data, at, expiry)})
+    except (TypeError, ValueError) as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 400
+
+
+@app.route('/api/simulator/replay/<int:event_id>', methods=['POST'])
+@login_required
+def replay_simulator_signal(event_id):
+    """Replay a saved signal across later completed journal candles.
+
+    Futures closes come from the durable journal. Option marks use Black-76
+    when exact historical option-leg candles were not saved, and the response
+    labels that limitation instead of mixing in present-day quotes.
+    """
+    from calendar import month_abbr
+    from datetime import timedelta
+    from src.adaptive_strategy import build_recommendation
+    from src.database import UnifiedOrderManager
+    from src.instrument_config import get_instrument_config
+    from src.simulation_engine import black76, calculate
+    from src.utils import construct_symbol
+    data = request.get_json(silent=True) or {}
+    db = UnifiedOrderManager.get_instance(); source = db.get_strategy_event(event_id)
+    if not source:
+        return jsonify({'status': 'error', 'message': 'Source signal not found'}), 404
+    symbol = str(source.get('symbol') or 'NATGASMINI').upper()
+    expiry_code = str(source.get('expiry') or '').upper()
+    try:
+        year = 2000 + int(expiry_code[:2]); month = list(month_abbr).index(expiry_code[2:5].title())
+        naive_expiry = datetime(year, month, get_instrument_config(symbol).get('expiry_day', 24), 23, 30)
+        expiry_dt = TIMEZONE.localize(naive_expiry) if hasattr(TIMEZONE, 'localize') else naive_expiry.replace(tzinfo=TIMEZONE)
+    except (ValueError, IndexError):
+        return jsonify({'status': 'error', 'message': 'The source signal has no valid contract expiry'}), 400
+    payload = source.get('payload') or {}; details = payload.get('details') or {}
+    try:
+        underlying = float(source.get('market_price') or details.get('futures_close'))
+        atm = int(float(source.get('atm_strike') or payload.get('atm_strike')))
+        source_at = datetime.fromisoformat(str(source.get('candle_at') or source.get('occurred_at')).replace('Z', '+00:00'))
+        if source_at.tzinfo is None: source_at = source_at.replace(tzinfo=TIMEZONE)
+    except (TypeError, ValueError):
+        return jsonify({'status': 'error', 'message': 'Source signal is missing price, ATM, or candle time'}), 400
+    symbols = payload.get('symbols') or {}
+    stored_prices = {symbols.get('fut'): details.get('futures_close'), symbols.get('ce'): details.get('ce_close'), symbols.get('pe'): details.get('pe_close')}
+    recommendation = build_recommendation(
+        trend=source.get('trend') or 'NEUTRAL', signal_status=source.get('signal_status') or 'HISTORICAL_SIGNAL',
+        cmp=underlying, atm_strike=atm, expiry=expiry_code,
+        option_interval=get_instrument_config(symbol).get('strike_interval', 5),
+        quote=lambda item: float(stored_prices.get(item) or 0),
+        symbol_builder=lambda base, kind, item_expiry, strike, option_type: construct_symbol(symbol, kind, item_expiry, strike, option_type),
+        consolidation=(source.get('trend') == 'NEUTRAL'),
+    )
+    iv = max(0.0001, float(data.get('implied_volatility') or 35) / 100)
+    rate = float(data.get('interest_rate') or 6.5) / 100
+    replay_legs = []
+    for leg in recommendation.get('legs') or []:
+        entry = leg.get('premium')
+        if leg.get('instrument') == 'FUT': entry = underlying
+        if not entry and leg.get('instrument') == 'OPT':
+            years = max(0, (expiry_dt - source_at).total_seconds()) / (365 * 24 * 3600)
+            entry = black76(underlying, float(leg['strike']), years, rate, iv, leg['option_type'])['price']
+        replay_legs.append({**leg, 'side': leg.get('action'), 'entry': round(float(entry or 0), 4),
+                            'price_source': 'HISTORICAL_CLOSE' if leg.get('premium') else 'THEORETICAL_ESTIMATE'})
+    all_events = db.list_strategy_events(limit=min(500, int(data.get('limit') or 100)), symbol=symbol)
+    candidates = []
+    for event in all_events:
+        raw_time = event.get('candle_at') or event.get('occurred_at')
+        try:
+            candle = datetime.fromisoformat(str(raw_time).replace('Z', '+00:00'))
+            if candle.tzinfo is None: candle = candle.replace(tzinfo=TIMEZONE)
+            price = float(event.get('market_price') or (event.get('payload') or {}).get('details', {}).get('futures_close'))
+        except (TypeError, ValueError):
+            continue
+        if source_at <= candle <= expiry_dt:
+            candidates.append((candle, price, event))
+    candidates.sort(key=lambda item: item[0])
+    points = []
+    for candle, price, event in candidates:
+        calc_payload = {'mode': 'TARGET_DATE', 'underlying_price': price,
+                        'lot_size': get_instrument_config(symbol).get('lot_size', 1),
+                        'implied_volatility': iv * 100, 'interest_rate': rate * 100,
+                        'legs': replay_legs, 'charges': data.get('charges') or {}}
+        result = calculate(calc_payload, min(candle, expiry_dt), expiry_dt)
+        points.append({'at': candle.isoformat(), 'price': price, 'net_pnl': result['net_pnl'],
+                       'trend': event.get('trend'), 'event_id': event.get('id'), 'legs': result['legs']})
+    return jsonify({'status': 'success', 'source_event_id': event_id, 'strategy': recommendation.get('strategy'),
+                    'strategy_version': 'CANONICAL_V1', 'data_quality': 'THEORETICAL_OPTIONS_FROM_SAVED_FUTURES_EVENTS',
+                    'warning': 'Option legs use Black-76 estimates when exact historical leg candles were not saved.',
+                    'points': points, 'count': len(points)})
+
+
 @app.route('/api/simulations', methods=['GET'])
 @login_required
 def list_simulations():
     from src.database import UnifiedOrderManager
+    user = state_mgr.user_manager.get_user_by_token(session.get('user_token')) or {}
+    requested_owner = request.args.get('owner')
+    owner = requested_owner if user.get('role') == 'ADMIN' else user.get('id')
     rows = UnifiedOrderManager.get_instance().list_simulations(
         limit=request.args.get('limit', 50, type=int),
         basket_id=request.args.get('basket_id'),
+        owner=owner, status=request.args.get('status'),
+        archived=request.args.get('archived', 'false').lower() == 'true',
+        search=request.args.get('search'),
     )
     return jsonify({"simulations": rows, "count": len(rows)})
 
@@ -1856,9 +2074,16 @@ def list_simulations():
 @login_required
 def delete_simulation(simulation_id):
     from src.database import UnifiedOrderManager
-    deleted = UnifiedOrderManager.get_instance().delete_simulation(simulation_id)
+    db = UnifiedOrderManager.get_instance(); row = db.get_simulation(simulation_id)
+    if not row:
+        return jsonify({"status": "error", "message": "Simulation not found"}), 404
+    user = state_mgr.user_manager.get_user_by_token(session.get('user_token')) or {}
+    if user.get('role') != 'ADMIN' and row.get('owner') not in (None, '', user.get('id')):
+        return jsonify({"status": "error", "message": "You can delete only your own simulation views"}), 403
+    deleted = db.delete_simulation(simulation_id)
     if not deleted:
         return jsonify({"status": "error", "message": "Simulation not found"}), 404
+    state_mgr.add_log(f"Simulation deleted: {simulation_id}", category="SIMULATOR", user=session.get('username'))
     return jsonify({"status": "success", "simulation_id": simulation_id})
 
 @app.route('/api/simulations/<simulation_id>', methods=['GET'])
@@ -1868,7 +2093,55 @@ def get_simulation(simulation_id):
     row = UnifiedOrderManager.get_instance().get_simulation(simulation_id)
     if not row:
         return jsonify({"status": "error", "message": "Simulation not found"}), 404
+    user = state_mgr.user_manager.get_user_by_token(session.get('user_token')) or {}
+    if user.get('role') != 'ADMIN' and row.get('owner') not in (None, '', user.get('id')):
+        return jsonify({"status": "error", "message": "You can view only your own simulation views"}), 403
     return jsonify({"simulation": row})
+
+
+@app.route('/api/simulations/<simulation_id>', methods=['PATCH'])
+@login_required
+def update_simulation_view(simulation_id):
+    from src.database import UnifiedOrderManager
+    db = UnifiedOrderManager.get_instance(); row = db.get_simulation(simulation_id)
+    if not row:
+        return jsonify({"status": "error", "message": "Simulation not found"}), 404
+    user = state_mgr.user_manager.get_user_by_token(session.get('user_token')) or {}
+    if user.get('role') != 'ADMIN' and row.get('owner') not in (None, '', user.get('id')):
+        return jsonify({"status": "error", "message": "You can update only your own simulation views"}), 403
+    data = request.get_json(silent=True) or {}
+    status = str(data.get('status') or row.get('status') or 'DRAFT').upper()
+    if status not in ('DRAFT', 'VALIDATED', 'REVIEWED', 'APPROVED_FOR_CONSIDERATION', 'ARCHIVED'):
+        return jsonify({"status": "error", "message": "Invalid simulation lifecycle status"}), 400
+    changed = db.update_simulation_view(
+        simulation_id, name=str(data.get('name') or row.get('name') or simulation_id)[:120],
+        status=status, archived=bool(data.get('archived', status == 'ARCHIVED')),
+    )
+    if changed:
+        state_mgr.add_log(f"Simulation updated: {simulation_id} -> {status}", category="SIMULATOR", user=session.get('username'))
+    return jsonify({"status": "success", "simulation": db.get_simulation(simulation_id)})
+
+
+@app.route('/api/simulations/<simulation_id>/duplicate', methods=['POST'])
+@login_required
+def duplicate_simulation_view(simulation_id):
+    import uuid
+    from src.database import UnifiedOrderManager
+    db = UnifiedOrderManager.get_instance(); row = db.get_simulation(simulation_id)
+    if not row:
+        return jsonify({"status": "error", "message": "Simulation not found"}), 404
+    user = state_mgr.user_manager.get_user_by_token(session.get('user_token')) or {}
+    if user.get('role') != 'ADMIN' and row.get('owner') not in (None, '', user.get('id')):
+        return jsonify({"status": "error", "message": "You can duplicate only your own simulation views"}), 403
+    new_id = "SIM_" + uuid.uuid4().hex[:12].upper()
+    data = request.get_json(silent=True) or {}
+    db.save_simulation(new_id, row.get('basket_id'), row.get('entry_at'), row.get('exit_at'),
+                       row.get('quantity_multiplier') or 1, row.get('input_data') or {},
+                       row.get('result_data') or {}, {"name": str(data.get('name') or f"Copy of {row.get('name') or simulation_id}")[:120],
+                       "owner": user.get('id'), "status": "DRAFT",
+                       "strategy_version": row.get('strategy_version'), "mode": row.get('mode')})
+    state_mgr.add_log(f"Simulation duplicated: {simulation_id} -> {new_id}", category="SIMULATOR", user=session.get('username'))
+    return jsonify({"status": "success", "simulation": db.get_simulation(new_id)})
 
 @app.route('/api/simulations/<simulation_id>/export', methods=['GET'])
 @login_required
@@ -1879,12 +2152,27 @@ def export_simulation(simulation_id):
     row = UnifiedOrderManager.get_instance().get_simulation(simulation_id)
     if not row:
         return jsonify({"status": "error", "message": "Simulation not found"}), 404
+    user = state_mgr.user_manager.get_user_by_token(session.get('user_token')) or {}
+    if user.get('role') != 'ADMIN' and row.get('owner') not in (None, '', user.get('id')):
+        return jsonify({"status": "error", "message": "You can export only your own simulation views"}), 403
+    if request.args.get('format') == 'json':
+        return Response(json.dumps(row, indent=2, default=str), mimetype='application/json',
+                        headers={"Content-Disposition": f"attachment; filename={simulation_id}.json"})
     output = io.StringIO(); writer = csv.writer(output)
-    writer.writerow(["Simulation", simulation_id]); writer.writerow(["Entry IST", row.get("entry_at")]); writer.writerow(["Exit IST", row.get("exit_at")])
-    writer.writerow([]); writer.writerow(["Contract", "Side", "Type", "Strike", "Quantity", "Entry", "Exit", "P&L"])
-    for leg in row.get("result_data", {}).get("legs", []):
-        writer.writerow([leg.get("symbol"), leg.get("side"), leg.get("instrument"), leg.get("strike"), leg.get("qty"), leg.get("entry_price"), leg.get("exit_price"), leg.get("pnl")])
-    writer.writerow([]); writer.writerow(["Total P&L", row.get("result_data", {}).get("total_pnl")])
+    result = row.get("result_data", {})
+    writer.writerow(["Simulation", simulation_id]); writer.writerow(["Name", row.get("name")]); writer.writerow(["Status", row.get("status")])
+    writer.writerow(["Created IST", row.get("created_at")]); writer.writerow(["As of IST", result.get("as_of") or row.get("entry_at")]); writer.writerow(["Expiry IST", result.get("expiry") or row.get("exit_at")])
+    writer.writerow(["Mode", result.get("mode") or row.get("mode")]); writer.writerow(["Strategy version", row.get("strategy_version")])
+    writer.writerow([]); writer.writerow(["Contract", "Role", "Side", "Type", "Strike", "Quantity", "Entry", "Mark", "Intrinsic", "Time value", "Delta", "Gamma", "Theta", "Vega", "Gross P&L", "Price source"])
+    for leg in result.get("legs", []):
+        writer.writerow([leg.get("symbol"), leg.get("role"), leg.get("side"), leg.get("instrument"), leg.get("strike"), leg.get("qty"), leg.get("entry_price"), leg.get("mark_price", leg.get("exit_price")), leg.get("intrinsic_value"), leg.get("time_value"), leg.get("delta"), leg.get("gamma"), leg.get("theta"), leg.get("vega"), leg.get("gross_pnl", leg.get("pnl")), leg.get("price_source")])
+    writer.writerow([]); writer.writerow(["Gross P&L", result.get("gross_pnl")]); writer.writerow(["Net P&L", result.get("net_pnl", result.get("total_pnl"))]); writer.writerow(["Charges", (result.get("charges") or {}).get("total", result.get("total_charges"))]); writer.writerow(["Estimated margin", result.get("estimated_margin")])
+    scenario = result.get("scenario") or {}
+    if scenario.get("matrix"):
+        writer.writerow([]); writer.writerow(["Scenario matrix"])
+        writer.writerow(["Move %", "Underlying"] + [str(value) for value in scenario.get("dates", [])])
+        for scenario_row in scenario.get("matrix", []):
+            writer.writerow([scenario_row.get("move_percent"), scenario_row.get("price")] + scenario_row.get("values", []))
     return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={simulation_id}.csv"})
 
 @app.route('/api/simulations/validate', methods=['POST'])
@@ -1892,6 +2180,7 @@ def export_simulation(simulation_id):
 def validate_simulation_basket():
     data = request.get_json(silent=True) or {}; legs = data.get("legs") or []
     errors, warnings = [], []
+    expected_expiry = str(data.get("expected_expiry") or "").upper()
     if not legs: errors.append("Add at least one basket leg.")
     expiries = {str(item.get("expiry") or "").upper() for item in legs if item.get("type") != "FUT" and item.get("instrument") != "FUT"}
     if len(expiries - {""}) > 1: errors.append("All option legs must use the same expiry.")
@@ -1900,6 +2189,12 @@ def validate_simulation_basket():
         if float(leg.get("qty") or 0) <= 0: errors.append(f"Leg {index}: quantity must be positive.")
         if float(leg.get("price") or 0) < 0: errors.append(f"Leg {index}: price cannot be negative.")
         kind = str(leg.get("type") or leg.get("instrument") or "OPT").upper()
+        leg_expiry = str(leg.get("expiry") or expected_expiry or "").upper()
+        symbol = str(leg.get("symbol") or "").upper()
+        if expected_expiry and leg_expiry != expected_expiry:
+            errors.append(f"Leg {index}: expiry {leg_expiry or 'missing'} does not match {expected_expiry}.")
+        if expected_expiry and symbol and expected_expiry not in symbol:
+            errors.append(f"Leg {index}: contract symbol does not match the selected month {expected_expiry}.")
         if kind == "OPT" and (float(leg.get("strike") or 0) <= 0 or str(leg.get("opt") or leg.get("option_type") or "").upper() not in ("CE", "PE")):
             errors.append(f"Leg {index}: option needs a valid CE/PE strike.")
     shorts = [x for x in legs if str(x.get("side")).upper() == "SELL" and str(x.get("opt") or x.get("option_type") or "").upper() in ("CE", "PE")]
@@ -2017,6 +2312,41 @@ def run_simulation():
         raw_legs = basket.get("orders", [])
     if not isinstance(raw_legs, list) or not raw_legs:
         return jsonify({"status": "error", "message": "A basket with at least one leg is required"}), 400
+
+    # Version 2 uses the same Black-76 engine as the interactive graph. Older
+    # saved clients continue through the legacy mark-to-mark calculation below.
+    if int(data.get("engine_version") or 1) >= 2:
+        import uuid
+        from src.simulation_engine import calculate, scenario_surface
+        try:
+            at, entry_at = _parse_simulation_time(data.get("as_of") or data.get("entry_at"), "as_of")
+            expiry_dt, exit_at = _parse_simulation_time(data.get("expiry") or data.get("exit_at"), "expiry")
+            result = calculate(data, at, expiry_dt)
+            if data.get("include_scenario", True) and expiry_dt > at:
+                result["scenario"] = scenario_surface(data, at, expiry_dt)
+        except (TypeError, ValueError) as exc:
+            return jsonify({"status": "error", "message": str(exc)}), 400
+        simulation_id = "SIM_" + uuid.uuid4().hex[:12].upper()
+        user = state_mgr.user_manager.get_user_by_token(session.get('user_token')) or {}
+        result.update({"simulation_id": simulation_id,
+                       "strategy": data.get("strategy"),
+                       "strategy_version": data.get("strategy_version") or "CANONICAL_V1",
+                       "source_event_id": data.get("source_event_id")})
+        db.save_simulation(
+            simulation_id, basket_id, entry_at, exit_at,
+            float(data.get("quantity_multiplier") or 1), data, result,
+            {"name": str(data.get("name") or simulation_id)[:120], "owner": user.get("id"),
+             "status": "DRAFT", "strategy_version": result["strategy_version"],
+             "mode": result.get("mode")},
+        )
+        record_strategy_event("SIMULATION_RUN", str(data.get("symbol") or "NATGASMINI"),
+                              str(data.get("trend") or "NEUTRAL"), {}, data.get("contract_expiry"),
+                              data.get("atm_strike"), data.get("underlying_price"),
+                              {"simulation_id": simulation_id, "basket_id": basket_id,
+                               "source_event_id": data.get("source_event_id"),
+                               "net_pnl": result.get("net_pnl"), "mode": result.get("mode"),
+                               "strategy_version": result.get("strategy_version")})
+        return jsonify({"status": "success", "simulation": result})
 
     try:
         entry_dt, entry_at = _parse_simulation_time(data.get("entry_at"), "entry_at")

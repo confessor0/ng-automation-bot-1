@@ -125,6 +125,16 @@ class UnifiedOrderManager:
                     result_data TEXT NOT NULL
                 )
             """)
+            simulation_columns = {row[1] for row in cursor.execute("PRAGMA table_info(simulations)").fetchall()}
+            for column, definition in {
+                "name": "TEXT", "owner": "TEXT", "status": "TEXT DEFAULT 'DRAFT'",
+                "updated_at": "TEXT", "strategy_version": "TEXT", "mode": "TEXT",
+                "archived": "INTEGER DEFAULT 0"
+            }.items():
+                if column not in simulation_columns:
+                    cursor.execute(f"ALTER TABLE simulations ADD COLUMN {column} {definition}")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_simulations_owner ON simulations(owner, created_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_simulations_status ON simulations(status, archived)")
 
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS scan_runs (
@@ -385,24 +395,41 @@ class UnifiedOrderManager:
         return event
 
     def save_simulation(self, simulation_id, basket_id, entry_at, exit_at,
-                        quantity_multiplier, input_data, result_data):
+                        quantity_multiplier, input_data, result_data, metadata=None):
         created_at = datetime.now(TIMEZONE).isoformat()
+        metadata = metadata or {}
         with sqlite3.connect(self.DB_PATH) as conn:
             conn.execute("""
                 INSERT INTO simulations
                 (simulation_id, basket_id, created_at, entry_at, exit_at,
-                 quantity_multiplier, input_data, result_data)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 quantity_multiplier, input_data, result_data, name, owner,
+                 status, updated_at, strategy_version, mode, archived)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (simulation_id, basket_id, created_at, entry_at, exit_at,
                   quantity_multiplier, json.dumps(input_data, default=str),
-                  json.dumps(result_data, default=str)))
+                  json.dumps(result_data, default=str),
+                  metadata.get("name") or simulation_id, metadata.get("owner"),
+                  metadata.get("status") or "DRAFT", created_at,
+                  metadata.get("strategy_version"), metadata.get("mode"),
+                  1 if metadata.get("archived") else 0))
             conn.commit()
 
-    def list_simulations(self, limit=50, basket_id=None):
+    def list_simulations(self, limit=50, basket_id=None, owner=None, status=None,
+                         archived=False, search=None):
         query = "SELECT * FROM simulations"
-        params = []
+        params, where = [], []
         if basket_id:
-            query += " WHERE basket_id = ?"; params.append(basket_id)
+            where.append("basket_id = ?"); params.append(basket_id)
+        if owner:
+            where.append("owner = ?"); params.append(owner)
+        if status:
+            where.append("status = ?"); params.append(status)
+        where.append("COALESCE(archived, 0) = ?"); params.append(1 if archived else 0)
+        if search:
+            where.append("(simulation_id LIKE ? OR name LIKE ?)")
+            params.extend([f"%{search}%", f"%{search}%"])
+        if where:
+            query += " WHERE " + " AND ".join(where)
         query += " ORDER BY created_at DESC LIMIT ?"
         params.append(max(1, min(int(limit or 50), 500)))
         with sqlite3.connect(self.DB_PATH) as conn:
@@ -412,6 +439,20 @@ class UnifiedOrderManager:
             row["input_data"] = json.loads(row["input_data"] or "{}")
             row["result_data"] = json.loads(row["result_data"] or "{}")
         return rows
+
+    def update_simulation_view(self, simulation_id, **updates):
+        allowed = {"name", "status", "archived"}
+        values = {key: value for key, value in updates.items() if key in allowed}
+        if not values:
+            return False
+        values["updated_at"] = datetime.now(TIMEZONE).isoformat()
+        assignments = ", ".join(f"{key} = ?" for key in values)
+        params = [1 if key == "archived" and value else value for key, value in values.items()]
+        params.append(simulation_id)
+        with sqlite3.connect(self.DB_PATH) as conn:
+            cursor = conn.execute(f"UPDATE simulations SET {assignments} WHERE simulation_id = ?", params)
+            conn.commit()
+            return cursor.rowcount > 0
 
     def delete_simulation(self, simulation_id):
         """Delete one saved simulation view by its immutable ID."""
