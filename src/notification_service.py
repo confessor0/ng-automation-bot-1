@@ -73,16 +73,22 @@ def provider_status(settings=None):
 def send_email_notification(subject, message, recipient, settings=None, alert_type=None):
     """Send plain-text email through the selected Brevo or Mailjet API."""
     settings = settings or load_provider_settings()
+    settings.pop("_last_error", None)
+    settings.pop("_last_status", None)
     recipients = normalize_recipients(settings.get("recipients") or recipient)
     provider = settings.get("provider", "mailjet")
     status, error = "SKIPPED", None
     if not recipients or not settings.get("from_email"):
+        settings["_last_error"] = "Missing recipient or sender address"
+        settings["_last_status"] = "SKIPPED"
         _save_email_log(provider, subject, recipients, status, "Missing recipients or sender", alert_type)
         return False
     sender = {"email": settings["from_email"], "name": settings.get("from_name") or "NG Automation Bot"}
     try:
         if provider == "brevo":
             if not settings.get("brevo_api_key"):
+                settings["_last_error"] = "Brevo API key is not configured"
+                settings["_last_status"] = "SKIPPED"
                 _save_email_log(provider, subject, recipients, status, "Brevo API key is not configured", alert_type)
                 return False
             response = requests.post(
@@ -92,6 +98,8 @@ def send_email_notification(subject, message, recipient, settings=None, alert_ty
                       "subject": subject, "textContent": message}, timeout=10)
         else:
             if not (settings.get("mailjet_api_key") and settings.get("mailjet_secret_key")):
+                settings["_last_error"] = "Mailjet API key or secret is not configured"
+                settings["_last_status"] = "SKIPPED"
                 _save_email_log(provider, subject, recipients, status, "Mailjet credentials are not configured", alert_type)
                 return False
             response = requests.post(
@@ -101,10 +109,18 @@ def send_email_notification(subject, message, recipient, settings=None, alert_ty
                                     "To": [{"Email": email} for email in recipients], "Subject": subject,
                                     "TextPart": message}]}, timeout=10)
         response.raise_for_status()
+        settings["_last_status"] = "SENT"
         _save_email_log(provider, subject, recipients, "SENT", None, alert_type)
         return True
     except Exception as exc:
         error = type(exc).__name__
+        response = getattr(exc, "response", None)
+        if response is not None:
+            detail = (getattr(response, "text", "") or "").replace("\n", " ").strip()
+            if detail:
+                error = f"{error}: {detail[:300]}"
+        settings["_last_error"] = error
+        settings["_last_status"] = "FAILED"
         _save_email_log(provider, subject, recipients, "FAILED", error, alert_type)
         print(f"{provider.title()} notification failed: {error}")
         return False

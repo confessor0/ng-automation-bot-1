@@ -2555,10 +2555,14 @@ def admin_email_notifications_test():
     from src.notification_service import send_email_notification, load_provider_settings
     provider_settings = load_provider_settings()
     cfg = state_mgr.get_state().get("email_notification_config") or provider_settings.get("notifications", {})
-    provider = load_provider_settings().get("provider", "mailjet")
-    if send_email_notification(f"NG Bot {provider.title()} test", "Email notifications are configured.", cfg.get("recipient")):
+    provider = provider_settings.get("provider", "mailjet")
+    recipients = cfg.get("recipients") or cfg.get("recipient") or provider_settings.get("recipients")
+    provider_settings["recipients"] = recipients
+    if send_email_notification(f"NG Bot {provider.title()} test", "Email notifications are configured.", recipients,
+                                settings=provider_settings, alert_type="TEST"):
         return jsonify({"status": "success", "message": "Test email accepted by the provider."})
-    return jsonify({"status": "error", "message": "Test email failed. Check provider credentials, verified sender, and recipient."}), 400
+    reason = provider_settings.get("_last_error") or "Check provider credentials, verified sender, and recipient."
+    return jsonify({"status": "error", "message": f"Test email failed: {reason}"}), 400
 
 # FYERS credential login routes retained from the existing application behavior.
 @app.route('/api/admin/save_credentials', methods=['POST'])
