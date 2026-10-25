@@ -1851,11 +1851,6 @@ def list_simulations():
     )
     return jsonify({"simulations": rows, "count": len(rows)})
 
-@app.route('/simulator', methods=['GET'])
-@login_required
-def simulator_page():
-    return render_template('simulator.html')
-
 
 @app.route('/api/simulations/<simulation_id>', methods=['DELETE'])
 @login_required
