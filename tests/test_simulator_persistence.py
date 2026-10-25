@@ -68,6 +68,14 @@ class SimulatorPersistenceTests(unittest.TestCase):
         self.assertGreaterEqual(data["count"], 2)
         self.assertIn("THEORETICAL_OPTIONS", data["data_quality"])
 
+    def test_scan_history_listing_is_capped_at_twenty(self):
+        for index in range(25):
+            self.db.save_scan_run(
+                f"SCAN_{index:02d}", "NATGASMINI", 20,
+                "2026-10-01", "2026-10-24", "COMPLETED", {"records": 20}
+            )
+        self.assertEqual(len(self.db.list_scan_runs(limit=200)), 20)
+
 
 if __name__ == "__main__":
     unittest.main()

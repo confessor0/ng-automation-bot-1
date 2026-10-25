@@ -545,7 +545,10 @@ class UnifiedOrderManager:
         if symbol:
             query += " WHERE symbol = ?"; params.append(symbol)
         query += " ORDER BY created_at DESC LIMIT ?"
-        params.append(max(1, min(int(limit or 25), 200)))
+        # The journal is intentionally a compact recent-history view. Older
+        # scans remain durable in the database but are not returned in the UI
+        # list unless a future archive/export workflow is added.
+        params.append(max(1, min(int(limit or 20), 20)))
         with sqlite3.connect(self.DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             rows = [dict(row) for row in conn.execute(query, params).fetchall()]

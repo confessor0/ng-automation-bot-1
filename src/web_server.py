@@ -1565,7 +1565,7 @@ def get_strategy_events():
 def get_strategy_scans():
     from src.database import UnifiedOrderManager
     rows = UnifiedOrderManager.get_instance().list_scan_runs(
-        limit=request.args.get('limit', 25, type=int),
+        limit=min(request.args.get('limit', 20, type=int), 20),
         symbol=request.args.get('symbol'),
     )
     return jsonify({"scans": rows, "count": len(rows)})
