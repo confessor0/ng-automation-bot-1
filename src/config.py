@@ -59,6 +59,7 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")  # Logging level
 # True: Bot only fetches data on user refresh (saves API quota)
 # False: Bot continuously polls every 15 seconds
 ON_DEMAND_MODE = os.getenv("ON_DEMAND_MODE", "true").lower() == "true"
+MOBILE_PUSH_POLL_SECONDS = max(60, int(os.getenv("MOBILE_PUSH_POLL_SECONDS", "300")))
 
 
 # ============================================================================
