@@ -2578,8 +2578,24 @@ def admin_email_notifications_test():
     provider = "brevo"
     recipients = cfg.get("recipients") or cfg.get("recipient") or provider_settings.get("recipients")
     provider_settings["recipients"] = recipients
-    if send_email_notification(f"NG Bot {provider.title()} test", "Email notifications are configured.", recipients,
-                                settings=provider_settings, alert_type="TEST"):
+    data = request.get_json(silent=True) or {}
+    sample_type = str(data.get("alert_type") or "TEST").upper()
+    samples = {
+        "TEST": ("NG Bot Brevo test", "Email notifications are configured and reachable."),
+        "CONFIRMED_TREND_CHANGE": ("NG sample: confirmed trend change", "SAMPLE ONLY — Confirmed trend changed from NEUTRAL to BULLISH after a completed daily candle.\nReview the active basket."),
+        "PROVISIONAL_REVERSAL": ("NG sample: possible reversal", "SAMPLE ONLY — Live prices suggest a possible reversal. This is not confirmed until the daily candle closes."),
+        "PROVISIONAL_NEUTRAL": ("NG sample: possible neutral shift", "SAMPLE ONLY — Both live options are below MA9. This is not confirmed until the daily candle closes."),
+        "WEAKENING": ("NG sample: position weakening", "SAMPLE ONLY — One option has lost the confirmed trend alignment intraday. Monitor risk; no basket switch is confirmed."),
+        "RECOVERY": ("NG sample: trend alignment recovered", "SAMPLE ONLY — Live option prices have realigned with the confirmed trend. No basket switch is required."),
+        "DATA_QUALITY": ("NG sample: data-quality warning", "SAMPLE ONLY — CE/PE quote data is missing or stale. Trend and basket decisions should be paused."),
+        "RISK": ("NG sample: risk alert", "SAMPLE ONLY — Risk or exit condition detected. Review margin, loss limits, and the active basket."),
+        "EXPIRY": ("NG sample: expiry alert", "SAMPLE ONLY — Contract expiry or rollover requires review before the next basket is used."),
+    }
+    if sample_type not in samples:
+        return jsonify({"status": "error", "message": "Unknown notification sample."}), 400
+    subject, message = samples[sample_type]
+    if send_email_notification(subject, message, recipients,
+                                settings=provider_settings, alert_type=sample_type):
         return jsonify({"status": "success", "message": "Test email accepted by the provider."})
     reason = provider_settings.get("_last_error") or "Check provider credentials, verified sender, and recipient."
     return jsonify({"status": "error", "message": f"Test email failed: {reason}"}), 400

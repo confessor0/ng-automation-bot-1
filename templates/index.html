@@ -1718,6 +1718,22 @@
                         <button class="btn btn-primary" onclick="adminSaveMailjet()">Save Settings</button>
                         <button class="btn btn-secondary" onclick="adminTestMailjet()">Send Brevo Test Email</button>
                     </div>
+                    <div style="border-top:1px solid #1e293b;padding-top:10px;margin-top:2px">
+                        <div style="font-size:12px;color:#cbd5e1;margin-bottom:6px">Test a notification sample (does not change trend or basket)</div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+                            <select id="admNotificationSample" class="multiplier-input">
+                                <option value="CONFIRMED_TREND_CHANGE">Confirmed trend change</option>
+                                <option value="PROVISIONAL_REVERSAL">Possible reversal</option>
+                                <option value="PROVISIONAL_NEUTRAL">Possible neutral shift</option>
+                                <option value="WEAKENING">Position weakening</option>
+                                <option value="RECOVERY">Trend recovery</option>
+                                <option value="DATA_QUALITY">Data-quality warning</option>
+                                <option value="RISK">Risk / exit alert</option>
+                                <option value="EXPIRY">Expiry / rollover alert</option>
+                            </select>
+                            <button class="btn btn-secondary" onclick="adminTestNotificationSample()">Send Sample Alert</button>
+                        </div>
+                    </div>
                     <div class="card" style="margin-top:8px;background:#0b1424">
                         <div style="display:flex;justify-content:space-between;align-items:center"><strong>📨 Email delivery log</strong><button class="btn btn-secondary" onclick="loadEmailLogs()">Refresh</button></div>
                         <div id="admEmailLogStatus" style="font-size:11px;color:#94a3b8;margin:6px 0">No delivery attempts loaded.</div>
@@ -3458,6 +3474,15 @@
         async function adminTestMailjet() {
             try { await adminSaveMailjet(true); const r=await fetch('/api/admin/email-notifications/test',{method:'POST'}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Email test failed'); alert(d.message); }
             catch(e) { alert(e.message); }
+        }
+        async function adminTestNotificationSample() {
+            try {
+                await adminSaveMailjet(true);
+                const alertType=document.getElementById('admNotificationSample').value;
+                const r=await fetch('/api/admin/email-notifications/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({alert_type:alertType})});
+                const d=await r.json(); if(!r.ok)throw new Error(d.message||'Sample notification failed'); alert(d.message);
+                await loadEmailLogs();
+            } catch(e) { alert(e.message); }
         }
         async function loadEmailLogs() {
             const status=document.getElementById('admEmailLogStatus'), body=document.getElementById('admEmailLogBody');
