@@ -2476,7 +2476,7 @@ def admin_email_notifications():
                         "delay_minutes": cfg.get("delay_minutes", 0),
                         "recipient": ", ".join(recipients),
                         "recipients": recipients,
-                        "provider": provider_settings.get("provider", "mailjet"),
+                        "provider": "brevo",
                         "from_email": provider_settings.get("from_email", ""),
                         "from_name": provider_settings.get("from_name", "NG Automation Bot"),
                         **provider_status(provider_settings)})
@@ -2492,9 +2492,7 @@ def admin_email_notifications():
     from_email = str(data.get("from_email", provider_settings.get("from_email") or DEFAULT_FROM_EMAIL)).strip()
     if from_email and ("@" not in from_email or len(from_email) > 254):
         return jsonify({"status": "error", "message": "Enter a valid verified sender email."}), 400
-    provider = str(data.get("provider", provider_settings.get("provider", "mailjet"))).lower()
-    if provider not in ("brevo", "mailjet"):
-        return jsonify({"status": "error", "message": "Choose Brevo or Mailjet."}), 400
+    provider = "brevo"
     try:
         delay_hours = int(data.get("delay_hours", 0))
         delay_minutes = int(data.get("delay_minutes", 0))
@@ -2560,7 +2558,7 @@ def admin_email_notifications_test():
     state_cfg = state_mgr.get_state().get("email_notification_config") or {}
     saved_cfg = provider_settings.get("notifications", {}) or {}
     cfg = {**saved_cfg, **state_cfg}
-    provider = provider_settings.get("provider", "mailjet")
+    provider = "brevo"
     recipients = cfg.get("recipients") or cfg.get("recipient") or provider_settings.get("recipients")
     provider_settings["recipients"] = recipients
     if send_email_notification(f"NG Bot {provider.title()} test", "Email notifications are configured.", recipients,

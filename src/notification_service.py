@@ -42,7 +42,9 @@ def load_provider_settings():
         except (OSError, ValueError):
             continue
     return {
-        "provider": saved.get("provider", "mailjet"),
+        # Brevo is the active transactional provider. Mailjet fields remain
+        # readable only for backward-compatible migration of old settings.
+        "provider": "brevo",
         "brevo_api_key": saved.get("brevo_api_key") or os.getenv("BREVO_API_KEY", ""),
         "mailjet_api_key": saved.get("mailjet_api_key") or config.MAILJET_API_KEY or "",
         "mailjet_secret_key": saved.get("mailjet_secret_key") or config.MAILJET_SECRET_KEY or "",
@@ -67,7 +69,7 @@ def save_provider_settings(settings):
 
 def provider_status(settings=None):
     settings = settings or load_provider_settings()
-    provider = settings.get("provider", "mailjet")
+    provider = "brevo"
     if provider == "brevo":
         configured = bool(settings.get("brevo_api_key") and settings.get("from_email"))
     else:

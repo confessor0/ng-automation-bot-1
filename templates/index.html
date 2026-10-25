@@ -1651,9 +1651,9 @@
                 <div class="admin-card-kicker">Provider settings are separate from Fyers authentication</div>
                 <div style="display:flex;flex-direction:column;gap:8px;">
                     <label><input type="checkbox" id="admMailjetEnabled"> Enable email notifications</label>
-                    <label style="font-size:12px;color:#94a3b8">Provider
+                    <label style="font-size:12px;color:#94a3b8">Transactional provider
                         <select id="admEmailProvider" class="multiplier-input" style="width:100%">
-                            <option value="brevo">Brevo</option><option value="mailjet">Mailjet</option>
+                            <option value="brevo">Brevo</option>
                         </select>
                     </label>
                     <div style="font-size:12px;color:#94a3b8">Trend change alerts</div>
@@ -1685,12 +1685,12 @@
                     <textarea id="admMailjetRecipients" class="multiplier-input" style="width:100%;min-height:56px" placeholder="Recipients (one per line or comma separated)"></textarea>
                     <input type="email" id="admMailjetFrom" class="multiplier-input" style="width:100%" value="mcxalerts@webprobity.com" placeholder="Verified sender email">
                     <input type="text" id="admEmailFromName" class="multiplier-input" style="width:100%" placeholder="Sender name">
-                    <input type="password" id="admBrevoKey" class="multiplier-input" style="width:100%" placeholder="Brevo API key" autocomplete="new-password">
-                    <input type="password" id="admMailjetKey" class="multiplier-input" style="width:100%" placeholder="Mailjet API key" autocomplete="new-password">
-                    <input type="password" id="admMailjetSecret" class="multiplier-input" style="width:100%" placeholder="Mailjet secret key" autocomplete="new-password">
+                    <input type="password" id="admBrevoKey" class="multiplier-input" style="width:100%" placeholder="Brevo API key (xkeysib-...)" autocomplete="new-password">
+                    <input type="password" id="admMailjetKey" class="multiplier-input" style="display:none" autocomplete="new-password">
+                    <input type="password" id="admMailjetSecret" class="multiplier-input" style="display:none" autocomplete="new-password">
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
                         <button class="btn btn-primary" onclick="adminSaveMailjet()">Save Settings</button>
-                        <button class="btn btn-secondary" onclick="adminTestMailjet()">Send Test Email</button>
+                        <button class="btn btn-secondary" onclick="adminTestMailjet()">Send Brevo Test Email</button>
                     </div>
                     <div class="card" style="margin-top:8px;background:#0b1424">
                         <div style="display:flex;justify-content:space-between;align-items:center"><strong>📨 Email delivery log</strong><button class="btn btn-secondary" onclick="loadEmailLogs()">Refresh</button></div>
@@ -3359,7 +3359,7 @@
                 const response=await fetch('/api/admin/email-notifications'); if(!response.ok)return;
                 const v=await response.json();
                 document.getElementById('admMailjetEnabled').checked=!!v.enabled;
-                document.getElementById('admEmailProvider').value=v.provider||'mailjet';
+                document.getElementById('admEmailProvider').value='brevo';
                 document.getElementById('admNotifyBullish').checked=v.notify_bullish!==false;
                 document.getElementById('admNotifyBearish').checked=v.notify_bearish!==false;
                 document.getElementById('admNotifyNeutral').checked=!!v.notify_neutral;
