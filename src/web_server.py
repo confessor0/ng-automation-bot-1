@@ -407,10 +407,13 @@ def refresh_market_data():
                 import time
                 from src.notification_service import send_email_notification, load_provider_settings, save_provider_settings
 
-                def queue_trend_email(kind, observed_trend, subject, message):
+                def queue_trend_email(kind, observed_trend, subject, message, alert_type=None):
                     option = {"BULLISH": "notify_bullish", "BEARISH": "notify_bearish",
                               "NEUTRAL": "notify_neutral"}.get(observed_trend)
-                    enabled_key = "notify_potential_trends" if kind == "POTENTIAL" else "notify_confirmed_trends"
+                    enabled_key = ("notify_recovery" if alert_type == "RECOVERY" else
+                                   "notify_weakening" if alert_type == "WEAKENING" else
+                                   "notify_data_quality" if alert_type == "DATA_QUALITY" else
+                                   "notify_potential_trends" if kind == "POTENTIAL" else "notify_confirmed_trends")
                     if not (mail_cfg.get("enabled") and mail_cfg.get("notify_trends", True) and
                             mail_cfg.get(enabled_key, True) and option and
                             mail_cfg.get(option, observed_trend != "NEUTRAL")):
@@ -422,6 +425,26 @@ def refresh_market_data():
                              "kind": kind, "due_at": time.time() + (delay_seconds or 60)}
                     if delay_seconds:
                         mail_cfg[pending_key] = event
+
+                def emit_strategy_alert(alert_type, priority, observed_trend, subject, message,
+                                       event_type, payload):
+                    """Create one deduplicated in-app/journal alert and optionally email it."""
+                    candle_key = str(details.get("candle_at") or datetime.now(TIMEZONE).date())[:10]
+                    dedupe_key = f"{symbol}|{expiry}|{candle_key}|{alert_type}|{observed_trend}"
+                    seen = mail_cfg.setdefault("alert_dedupe", {})
+                    if seen.get(dedupe_key):
+                        return
+                    seen[dedupe_key] = datetime.now(TIMEZONE).isoformat()
+                    state_mgr.add_alert(priority, "TREND", message)
+                    record_strategy_event(event_type, symbol, trend, details, expiry, atm_strike, ltp,
+                                          {**payload, "alert_type": alert_type, "confirmed_trend": trend,
+                                           "dedupe_key": dedupe_key})
+                    queue_trend_email("POTENTIAL" if alert_type.startswith("PROVISIONAL") or alert_type == "WEAKENING" else "CONFIRMED",
+                                      observed_trend, subject, message, alert_type=alert_type)
+                    # Bound persisted dedupe state while keeping one alert per candle/type.
+                    if len(seen) > 500:
+                        for old_key in list(seen)[:len(seen) - 500]:
+                            seen.pop(old_key, None)
                     elif send_email_notification(subject, message, mail_cfg.get("recipient")):
                         mail_cfg[f"last_notified_{kind.lower()}_trend"] = observed_trend
                     else:
@@ -430,12 +453,14 @@ def refresh_market_data():
                 previous_confirmed = mail_cfg.get("last_observed_trend", "NEUTRAL")
                 if trend in ("BULLISH", "BEARISH", "NEUTRAL") and trend != previous_confirmed:
                     mail_cfg["last_observed_trend"] = trend
-                    queue_trend_email("CONFIRMED", trend, f"NG confirmed trend: {trend}",
-                                      f"Confirmed at completed daily candle.\nNatural Gas trend: {trend}\n"
-                                      f"CE: {trend_data['ce_price']} (MA9 {trend_data['ce_ma9']})\n"
-                                      f"PE: {trend_data['pe_price']} (MA9 {trend_data['pe_ma9']})")
-                    record_strategy_event("CONFIRMED_TREND_CHANGE", symbol, trend, details, expiry, atm_strike, ltp,
-                                          {"previous_trend": previous_confirmed, "confirmation": "COMPLETED_DAILY_CANDLE"})
+                    emit_strategy_alert("CONFIRMED_TREND_CHANGE", "CRITICAL", trend,
+                                        f"NG confirmed trend: {previous_confirmed} → {trend}",
+                                        f"CONFIRMED TREND CHANGE: {previous_confirmed} → {trend}.\n"
+                                        f"CE close/MA9: {trend_data['ce_price']}/{trend_data['ce_ma9']}\n"
+                                        f"PE close/MA9: {trend_data['pe_price']}/{trend_data['pe_ma9']}\n"
+                                        "Review the active basket; the new strategy basket is available.",
+                                        "CONFIRMED_TREND_CHANGE",
+                                        {"previous_trend": previous_confirmed, "confirmation": "COMPLETED_DAILY_CANDLE"})
 
                 live_trend = None
                 if details.get("ce_symbol") and details.get("pe_symbol") and details.get("ce_ma9") and details.get("pe_ma9"):
@@ -448,17 +473,48 @@ def refresh_market_data():
                         live_trend = "BULLISH"
                     elif live_ce < details["ce_ma9"] and live_pe < details["pe_ma9"]:
                         live_trend = "NEUTRAL"
+                    if live_ce <= 0 or live_pe <= 0:
+                        emit_strategy_alert("DATA_QUALITY", "WARNING", trend,
+                                            "NG option quote data unavailable",
+                                            "Option quote data is missing or stale. Trend and basket decisions are paused until CE and PE prices are available.",
+                                            "DATA_QUALITY_ALERT", {"live_ce": live_ce, "live_pe": live_pe})
                     if live_trend:
                         previous_live = mail_cfg.get("last_observed_live_trend", trend)
                         if live_trend != previous_live:
                             mail_cfg["last_observed_live_trend"] = live_trend
-                            queue_trend_email("POTENTIAL", live_trend, f"NG potential intraday trend: {live_trend}",
-                                              f"Potential live change — NOT CONFIRMED until the daily candle closes.\n"
-                                              f"Natural Gas: {live_trend}\nLive CE: {live_ce:.2f} vs MA9 {details['ce_ma9']:.2f}\n"
-                                              f"Live PE: {live_pe:.2f} vs MA9 {details['pe_ma9']:.2f}")
-                            record_strategy_event("INTRADAY_TREND_CHANGE", symbol, trend, details, expiry, atm_strike, ltp,
-                                                  {"potential_trend": live_trend, "confirmed_trend": trend,
-                                                   "confirmation": "PENDING_DAILY_CLOSE", "live_ce": live_ce, "live_pe": live_pe})
+                            if live_trend == trend:
+                                alert_type, priority = "RECOVERY", "INFO"
+                                title = f"NG {trend} alignment recovered"
+                                body = (f"{trend} alignment recovered after an intraday warning.\n"
+                                        f"Confirmed trend remains {trend}. No basket switch is required.")
+                            elif live_trend == "NEUTRAL":
+                                alert_type, priority = "PROVISIONAL_NEUTRAL", "WARNING"
+                                title = "NG possible neutral shift"
+                                body = (f"POSSIBLE NEUTRAL SHIFT while confirmed trend is {trend}.\n"
+                                        "Both CE and PE are below MA9 intraday. This is NOT CONFIRMED until the daily candle closes.")
+                            else:
+                                alert_type, priority = "PROVISIONAL_REVERSAL", "WARNING"
+                                title = f"NG possible {live_trend.lower()} reversal"
+                                body = (f"POSSIBLE {live_trend} REVERSAL while confirmed trend is {trend}.\n"
+                                        "Do not switch baskets until the completed daily candle confirms the opposite pair.")
+                            message = (body + f"\nLive CE: {live_ce:.2f} vs MA9 {details['ce_ma9']:.2f}\n"
+                                       f"Live PE: {live_pe:.2f} vs MA9 {details['pe_ma9']:.2f}\n"
+                                       "Action: review risk and monitor the daily close.")
+                            emit_strategy_alert(alert_type, priority, live_trend, title, message,
+                                                "INTRADAY_TREND_CHANGE", {"potential_trend": live_trend,
+                                                "confirmation": "PENDING_DAILY_CLOSE", "live_ce": live_ce, "live_pe": live_pe})
+                    elif live_ce > 0 and live_pe > 0 and live_ce >= details['ce_ma9'] and live_pe >= details['pe_ma9']:
+                        # One side has lost alignment, but the opposite paired
+                        # condition is not complete. This is a weakening watch.
+                        previous_live = mail_cfg.get("last_observed_live_trend", trend)
+                        if previous_live == trend:
+                            emit_strategy_alert("WEAKENING", "WARNING", trend,
+                                                f"NG {trend} position weakening",
+                                                f"One option has lost the confirmed {trend} MA9 alignment intraday.\n"
+                                                f"Live CE: {live_ce:.2f} vs MA9 {details['ce_ma9']:.2f}\n"
+                                                f"Live PE: {live_pe:.2f} vs MA9 {details['pe_ma9']:.2f}\n"
+                                                "The trend is not reversed until the completed daily candle closes.",
+                                                "INTRADAY_TREND_WEAKENING", {"live_ce": live_ce, "live_pe": live_pe})
                 state_mgr.update("email_notification_config", mail_cfg)
                 provider_settings = load_provider_settings()
                 provider_settings["notifications"] = mail_cfg
@@ -2401,6 +2457,9 @@ def admin_email_notifications():
                         "notify_neutral": cfg.get("notify_neutral", False),
                         "notify_potential_trends": cfg.get("notify_potential_trends", True),
                         "notify_confirmed_trends": cfg.get("notify_confirmed_trends", True),
+                        "notify_recovery": cfg.get("notify_recovery", True),
+                        "notify_weakening": cfg.get("notify_weakening", True),
+                        "notify_data_quality": cfg.get("notify_data_quality", True),
                         "delivery_mode": cfg.get("delivery_mode", "immediate"),
                         "delay_hours": cfg.get("delay_hours", 0),
                         "delay_minutes": cfg.get("delay_minutes", 0),
@@ -2443,6 +2502,9 @@ def admin_email_notifications():
                 "notify_neutral": bool(data.get("notify_neutral")),
                 "notify_potential_trends": bool(data.get("notify_potential_trends", True)),
                 "notify_confirmed_trends": bool(data.get("notify_confirmed_trends", True)),
+                "notify_recovery": bool(data.get("notify_recovery", True)),
+                "notify_weakening": bool(data.get("notify_weakening", True)),
+                "notify_data_quality": bool(data.get("notify_data_quality", True)),
                 "delivery_mode": delivery_mode,
                 "delay_hours": delay_hours,
                 "delay_minutes": delay_minutes,
