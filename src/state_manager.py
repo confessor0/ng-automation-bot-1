@@ -308,6 +308,14 @@ class StateManager:
         except (OSError, ValueError, TypeError):
             pass
 
+        # Restore email notification preferences and last trend alert across restarts.
+        try:
+            with open(os.path.join(os.getcwd(), "email_notification_config.json"), "r", encoding="utf-8") as settings_file:
+                saved_email_settings = json.load(settings_file)
+            self.state["email_notification_config"] = saved_email_settings.get("notifications", {})
+        except (OSError, ValueError, TypeError):
+            self.state["email_notification_config"] = {}
+
     def update(self, key, value, symbol=None):
         with self.lock:
             # Update root state

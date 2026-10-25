@@ -7,3 +7,4 @@ Flask
 requests
 pytz
 gunicorn
+firebase-admin>=6.5.0,<8.0.0
