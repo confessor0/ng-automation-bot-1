@@ -43,15 +43,18 @@ def load_provider_settings():
             break
         except (OSError, ValueError):
             continue
-    transport = saved.get("brevo_transport", "api")
+    configured_transport = saved.get("brevo_transport")
     saved_smtp_login = saved.get("brevo_smtp_login") or os.getenv("BREVO_SMTP_LOGIN", "")
     saved_smtp_key = saved.get("brevo_smtp_key") or os.getenv("BREVO_SMTP_KEY", "")
     saved_api_key = saved.get("brevo_api_key") or os.getenv("BREVO_API_KEY", "")
-    # An SMTP credential must never be sent to the HTTP API. If SMTP
-    # credentials are present, always use SMTP even when an old API key is
-    # still stored in the environment or on the volume.
-    if saved_smtp_login and saved_smtp_key:
-        transport = "smtp"
+    # Respect an explicit admin choice. For older configurations without a
+    # transport field, infer SMTP only when that is the only complete setup.
+    # This lets Railway users switch to the HTTPS API even if old SMTP
+    # credentials remain saved on the volume.
+    if configured_transport in ("api", "smtp"):
+        transport = configured_transport
+    else:
+        transport = "smtp" if saved_smtp_login and saved_smtp_key and not saved_api_key else "api"
     return {
         # Brevo is the active transactional provider. Mailjet fields remain
         # readable only for backward-compatible migration of old settings.
