@@ -48,6 +48,7 @@ def load_provider_settings():
         "mailjet_secret_key": saved.get("mailjet_secret_key") or config.MAILJET_SECRET_KEY or "",
         "from_email": saved.get("from_email") or config.MAILJET_FROM_EMAIL or DEFAULT_FROM_EMAIL,
         "from_name": saved.get("from_name", "NG Automation Bot"),
+        "recipients": saved.get("recipients") or saved.get("notifications", {}).get("recipients", []),
         "notifications": saved.get("notifications", {}),
     }
 

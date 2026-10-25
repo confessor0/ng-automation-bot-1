@@ -2451,9 +2451,11 @@ def fyers_callback():
 def admin_email_notifications():
     from src.notification_service import load_provider_settings, save_provider_settings, provider_status
     provider_settings = load_provider_settings()
-    cfg = state_mgr.get_state().get("email_notification_config") or provider_settings.get("notifications", {})
+    state_cfg = state_mgr.get_state().get("email_notification_config") or {}
+    saved_cfg = provider_settings.get("notifications", {}) or {}
+    cfg = {**saved_cfg, **state_cfg}
     if request.method == 'GET':
-        recipients = cfg.get("recipients") or cfg.get("recipient", "")
+        recipients = cfg.get("recipients") or cfg.get("recipient", "") or provider_settings.get("recipients", [])
         if isinstance(recipients, str):
             from src.notification_service import normalize_recipients
             recipients = normalize_recipients(recipients)
@@ -2506,6 +2508,7 @@ def admin_email_notifications():
     if delivery_mode == "custom_delay" and delay_hours == 0 and delay_minutes == 0:
         return jsonify({"status": "error", "message": "Custom delay must be at least one minute."}), 400
     provider_settings.update({"provider": provider, "from_email": from_email,
+                              "recipients": recipients,
                               "from_name": str(data.get("from_name", provider_settings.get("from_name", "NG Automation Bot"))).strip() or "NG Automation Bot"})
     secret_fields = ("brevo_api_key", "mailjet_api_key", "mailjet_secret_key")
     for field in secret_fields:
@@ -2554,7 +2557,9 @@ def admin_email_notification_logs():
 def admin_email_notifications_test():
     from src.notification_service import send_email_notification, load_provider_settings
     provider_settings = load_provider_settings()
-    cfg = state_mgr.get_state().get("email_notification_config") or provider_settings.get("notifications", {})
+    state_cfg = state_mgr.get_state().get("email_notification_config") or {}
+    saved_cfg = provider_settings.get("notifications", {}) or {}
+    cfg = {**saved_cfg, **state_cfg}
     provider = provider_settings.get("provider", "mailjet")
     recipients = cfg.get("recipients") or cfg.get("recipient") or provider_settings.get("recipients")
     provider_settings["recipients"] = recipients
