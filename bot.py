@@ -25,7 +25,7 @@ if sys.stdout.encoding != 'utf-8':
 
 from src.positions_analyzer import PositionsAnalyzer
 from src.adjustment_engine import AdjustmentEngine
-from src.config import ON_DEMAND_MODE, is_market_open, get_ist_time
+from src.config import ON_DEMAND_MODE, MOBILE_PUSH_POLL_SECONDS, is_market_open, get_ist_time
 
 init(autoreset=True)
 
@@ -293,12 +293,23 @@ class TradingBot:
 
         token_mgr = TokenManager()
         last_token_check = time.time()
+        last_mobile_push_poll = 0
 
         while self.running:
             try:
+                if ON_DEMAND_MODE and is_market_open() and time.time() - last_mobile_push_poll >= MOBILE_PUSH_POLL_SECONDS:
+                    last_mobile_push_poll = time.time()
+                    from src.mobile_service import has_registered_devices
+                    if has_registered_devices():
+                        print("📱 Checking market trend for registered mobile push devices...")
+                        from src.web_server import app, refresh_market_data
+                        with app.test_request_context('/api/refresh', method='POST', json={"symbol": "NATGASMINI"}):
+                            refresh_market_data()
+
                 # Delayed email events are checked without triggering market API polling.
-                from src.notification_service import process_due_trend_notification
+                from src.notification_service import process_due_trend_notification, process_state_alert_notifications
                 process_due_trend_notification(self.state_mgr)
+                process_state_alert_notifications(self.state_mgr)
 
                 # [NEW] Market Hours Check (IST)
                 if not is_market_open():

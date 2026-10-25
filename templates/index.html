@@ -1632,6 +1632,8 @@
                     <label><input type="checkbox" id="admNotifyRecovery" checked> Recovery / alignment restored</label>
                     <label><input type="checkbox" id="admNotifyWeakening" checked> Position weakening warnings</label>
                     <label><input type="checkbox" id="admNotifyDataQuality" checked> Data-quality warnings</label>
+                    <label><input type="checkbox" id="admNotifyRisk" checked> Basket risk / exit alerts</label>
+                    <label><input type="checkbox" id="admNotifyExpiry" checked> Expiry / rollover alerts</label>
                     <label><input type="checkbox" id="admNotifyBullish" checked> Bullish</label>
                     <label><input type="checkbox" id="admNotifyBearish" checked> Bearish</label>
                     <label><input type="checkbox" id="admNotifyNeutral"> Neutral</label>
@@ -3331,6 +3333,8 @@
                 document.getElementById('admNotifyRecovery').checked=v.notify_recovery!==false;
                 document.getElementById('admNotifyWeakening').checked=v.notify_weakening!==false;
                 document.getElementById('admNotifyDataQuality').checked=v.notify_data_quality!==false;
+                document.getElementById('admNotifyRisk').checked=v.notify_risk!==false;
+                document.getElementById('admNotifyExpiry').checked=v.notify_expiry!==false;
                 document.getElementById('admEmailTiming').value=v.delivery_mode||'immediate';
                 document.getElementById('admEmailDelayHours').value=v.delay_hours||0;
                 document.getElementById('admEmailDelayMinutes').value=v.delay_minutes||0;
@@ -3359,6 +3363,8 @@
                     notify_recovery:document.getElementById('admNotifyRecovery').checked,
                     notify_weakening:document.getElementById('admNotifyWeakening').checked,
                     notify_data_quality:document.getElementById('admNotifyDataQuality').checked,
+                    notify_risk:document.getElementById('admNotifyRisk').checked,
+                    notify_expiry:document.getElementById('admNotifyExpiry').checked,
                     delivery_mode:document.getElementById('admEmailTiming').value,
                     delay_hours:document.getElementById('admEmailDelayHours').value,
                     delay_minutes:document.getElementById('admEmailDelayMinutes').value,

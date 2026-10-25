@@ -103,6 +103,52 @@ def process_due_trend_notification(state_manager):
         provider_settings = load_provider_settings()
         provider_settings["notifications"] = settings
         save_provider_settings(provider_settings)
+
+
+def process_state_alert_notifications(state_manager):
+    """Email newly-created risk/expiry/system alerts once, with deduplication."""
+    settings = state_manager.get_state().get("email_notification_config", {})
+    if not (settings.get("enabled") and settings.get("recipient")):
+        return
+    alerts = list(reversed(state_manager.get_state().get("alerts", [])))
+    if not alerts:
+        return
+    last_id = int(settings.get("last_alert_notification_id", 0) or 0)
+    newest_id = max(int(a.get("id", 0) or 0) for a in alerts)
+    if not last_id:
+        settings["last_alert_notification_id"] = newest_id
+        state_manager.update("email_notification_config", settings)
+        provider_settings = load_provider_settings()
+        provider_settings["notifications"] = settings
+        save_provider_settings(provider_settings)
+        return
+    changed = False
+    for alert in alerts:
+        alert_id = int(alert.get("id", 0) or 0)
+        if alert_id <= last_id:
+            continue
+        category = str(alert.get("category") or "SYSTEM").upper()
+        if category in ("RISK", "EXIT", "SCALING", "ADJUSTMENT"):
+            enabled = settings.get("notify_risk", True)
+        elif category in ("EXPIRY", "ROLLOVER"):
+            enabled = settings.get("notify_expiry", True)
+        elif category in ("DATA", "DATA_QUALITY"):
+            enabled = settings.get("notify_data_quality", True)
+        else:
+            enabled = False
+        if enabled:
+            priority = str(alert.get("priority") or "INFO")
+            subject = f"NG {priority}: {category} alert"
+            message = f"{alert.get('message', '')}\nTime (IST): {alert.get('timestamp', '-') }\nPriority: {priority}"
+            send_email_notification(subject, message, settings.get("recipient"))
+        last_id = max(last_id, alert_id)
+        changed = True
+    if changed:
+        settings["last_alert_notification_id"] = last_id
+        state_manager.update("email_notification_config", settings)
+        provider_settings = load_provider_settings()
+        provider_settings["notifications"] = settings
+        save_provider_settings(provider_settings)
         return
     if time.time() < float(pending.get("due_at", 0)):
         return
