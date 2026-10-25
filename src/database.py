@@ -138,6 +138,20 @@ class UnifiedOrderManager:
                     summary TEXT NOT NULL
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS email_notification_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sent_at TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    recipients TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    alert_type TEXT,
+                    metadata TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_email_notification_logs_sent_at ON email_notification_logs(sent_at)")
             conn.commit()
 
     def upsert_basket(self, basket_data: dict):
@@ -405,6 +419,32 @@ class UnifiedOrderManager:
             cursor = conn.execute("DELETE FROM simulations WHERE simulation_id = ?", (simulation_id,))
             conn.commit()
             return cursor.rowcount > 0
+
+    def save_email_notification_log(self, provider, subject, recipients, status,
+                                     error=None, alert_type=None, metadata=None):
+        with sqlite3.connect(self.DB_PATH) as conn:
+            conn.execute("""
+                INSERT INTO email_notification_logs
+                (sent_at, provider, subject, recipients, status, error, alert_type, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (datetime.now(TIMEZONE).isoformat(), provider, subject,
+                  json.dumps(recipients or []), status, error, alert_type,
+                  json.dumps(metadata or {})))
+            conn.commit()
+
+    def list_email_notification_logs(self, limit=100):
+        with sqlite3.connect(self.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = [dict(row) for row in conn.execute(
+                "SELECT * FROM email_notification_logs ORDER BY id DESC LIMIT ?",
+                (max(1, min(int(limit or 100), 500)),)).fetchall()]
+        for row in rows:
+            for key in ("recipients", "metadata"):
+                try:
+                    row[key] = json.loads(row[key] or ("[]" if key == "recipients" else "{}"))
+                except (TypeError, ValueError):
+                    pass
+        return rows
 
     def save_scan_run(self, scan_id, symbol, days_requested, from_date,
                       to_date, status, summary):

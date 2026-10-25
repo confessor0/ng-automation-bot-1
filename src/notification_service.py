@@ -1,6 +1,7 @@
 """Provider adapters for admin-configured email notifications."""
 import json
 import os
+import re
 import time
 
 import requests
@@ -8,6 +9,22 @@ import src.config as config
 
 
 SETTINGS_FILE = os.path.join(os.getcwd(), "email_notification_config.json")
+DEFAULT_FROM_EMAIL = "mcxalerts@webprobity.com"
+
+
+def normalize_recipients(value):
+    """Accept a list or comma/semicolon/newline separated addresses."""
+    values = value if isinstance(value, (list, tuple, set)) else re.split(r"[,;\n]+", str(value or ""))
+    result, seen = [], set()
+    for item in values:
+        email = str(item or "").strip()
+        if not email or "@" not in email or len(email) > 254:
+            continue
+        key = email.lower()
+        if key not in seen:
+            seen.add(key)
+            result.append(email)
+    return result
 
 
 def load_provider_settings():
@@ -22,7 +39,7 @@ def load_provider_settings():
         "brevo_api_key": saved.get("brevo_api_key") or os.getenv("BREVO_API_KEY", ""),
         "mailjet_api_key": saved.get("mailjet_api_key") or config.MAILJET_API_KEY or "",
         "mailjet_secret_key": saved.get("mailjet_secret_key") or config.MAILJET_SECRET_KEY or "",
-        "from_email": saved.get("from_email") or config.MAILJET_FROM_EMAIL or "",
+        "from_email": saved.get("from_email") or config.MAILJET_FROM_EMAIL or DEFAULT_FROM_EMAIL,
         "from_name": saved.get("from_name", "NG Automation Bot"),
         "notifications": saved.get("notifications", {}),
     }
@@ -53,35 +70,54 @@ def provider_status(settings=None):
             "mailjet_secret_key_set": bool(settings.get("mailjet_secret_key"))}
 
 
-def send_email_notification(subject, message, recipient, settings=None):
+def send_email_notification(subject, message, recipient, settings=None, alert_type=None):
     """Send plain-text email through the selected Brevo or Mailjet API."""
     settings = settings or load_provider_settings()
-    if not recipient or not settings.get("from_email"):
+    recipients = normalize_recipients(settings.get("recipients") or recipient)
+    provider = settings.get("provider", "mailjet")
+    status, error = "SKIPPED", None
+    if not recipients or not settings.get("from_email"):
+        _save_email_log(provider, subject, recipients, status, "Missing recipients or sender", alert_type)
         return False
     sender = {"email": settings["from_email"], "name": settings.get("from_name") or "NG Automation Bot"}
     try:
-        if settings.get("provider") == "brevo":
+        if provider == "brevo":
             if not settings.get("brevo_api_key"):
+                _save_email_log(provider, subject, recipients, status, "Brevo API key is not configured", alert_type)
                 return False
             response = requests.post(
                 "https://api.brevo.com/v3/smtp/email",
                 headers={"api-key": settings["brevo_api_key"], "accept": "application/json"},
-                json={"sender": sender, "to": [{"email": recipient}],
+                json={"sender": sender, "to": [{"email": email} for email in recipients],
                       "subject": subject, "textContent": message}, timeout=10)
         else:
             if not (settings.get("mailjet_api_key") and settings.get("mailjet_secret_key")):
+                _save_email_log(provider, subject, recipients, status, "Mailjet credentials are not configured", alert_type)
                 return False
             response = requests.post(
                 "https://api.mailjet.com/v3.1/send",
                 auth=(settings["mailjet_api_key"], settings["mailjet_secret_key"]),
                 json={"Messages": [{"From": {"Email": sender["email"], "Name": sender["name"]},
-                                    "To": [{"Email": recipient}], "Subject": subject,
+                                    "To": [{"Email": email} for email in recipients], "Subject": subject,
                                     "TextPart": message}]}, timeout=10)
         response.raise_for_status()
+        _save_email_log(provider, subject, recipients, "SENT", None, alert_type)
         return True
     except Exception as exc:
-        print(f"{settings.get('provider', 'mailjet').title()} notification failed: {type(exc).__name__}")
+        error = type(exc).__name__
+        _save_email_log(provider, subject, recipients, "FAILED", error, alert_type)
+        print(f"{provider.title()} notification failed: {error}")
         return False
+
+
+def _save_email_log(provider, subject, recipients, status, error=None, alert_type=None):
+    try:
+        from src.database import UnifiedOrderManager
+        UnifiedOrderManager.get_instance().save_email_notification_log(
+            provider, subject, recipients, status, error=error, alert_type=alert_type,
+            metadata={"recipient_count": len(recipients or [])})
+    except Exception as exc:
+        print(f"Email notification log failed: {type(exc).__name__}")
 
 
 def send_mailjet_notification(subject, message, recipient=None):
@@ -98,6 +134,20 @@ def process_due_trend_notification(state_manager):
     if not pending:
         return
     if not settings.get("enabled"):
+        settings.pop(pending_key, None)
+        state_manager.update("email_notification_config", settings)
+        provider_settings = load_provider_settings()
+        provider_settings["notifications"] = settings
+        save_provider_settings(provider_settings)
+        return
+    if time.time() < float(pending.get("due_at", 0)):
+        return
+    provider_settings = load_provider_settings()
+    provider_settings["recipients"] = settings.get("recipients") or settings.get("recipient", "")
+    if send_email_notification(pending.get("subject", "NG trend update"),
+                               pending.get("message", ""), provider_settings["recipients"],
+                               settings=provider_settings, alert_type=pending.get("alert_type")):
+        settings[f"last_notified_{str(pending.get('kind', 'confirmed')).lower()}_trend"] = pending.get("trend")
         settings.pop(pending_key, None)
         state_manager.update("email_notification_config", settings)
         provider_settings = load_provider_settings()
@@ -140,7 +190,10 @@ def process_state_alert_notifications(state_manager):
             priority = str(alert.get("priority") or "INFO")
             subject = f"NG {priority}: {category} alert"
             message = f"{alert.get('message', '')}\nTime (IST): {alert.get('timestamp', '-') }\nPriority: {priority}"
-            send_email_notification(subject, message, settings.get("recipient"))
+            provider_settings = load_provider_settings()
+            provider_settings["recipients"] = settings.get("recipients") or settings.get("recipient", "")
+            send_email_notification(subject, message, provider_settings["recipients"],
+                                    settings=provider_settings, alert_type=category)
         last_id = max(last_id, alert_id)
         changed = True
     if changed:
@@ -150,13 +203,3 @@ def process_state_alert_notifications(state_manager):
         provider_settings["notifications"] = settings
         save_provider_settings(provider_settings)
         return
-    if time.time() < float(pending.get("due_at", 0)):
-        return
-    if send_email_notification(pending.get("subject", "NG trend update"),
-                               pending.get("message", ""), settings.get("recipient")):
-        settings[f"last_notified_{str(pending.get('kind', 'confirmed')).lower()}_trend"] = pending.get("trend")
-        settings.pop(pending_key, None)
-        state_manager.update("email_notification_config", settings)
-        provider_settings = load_provider_settings()
-        provider_settings["notifications"] = settings
-        save_provider_settings(provider_settings)

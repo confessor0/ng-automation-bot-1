@@ -1652,8 +1652,8 @@
                         </label>
                     </div>
                     <div style="font-size:11px;color:#94a3b8">A delayed trend event is sent by the running app shortly after its delay expires. New trend changes replace a waiting event.</div>
-                    <input type="email" id="admMailjetRecipient" class="multiplier-input" style="width:100%" placeholder="Notification recipient email">
-                    <input type="email" id="admMailjetFrom" class="multiplier-input" style="width:100%" placeholder="Verified sender email">
+                    <textarea id="admMailjetRecipients" class="multiplier-input" style="width:100%;min-height:56px" placeholder="Recipients (one per line or comma separated)"></textarea>
+                    <input type="email" id="admMailjetFrom" class="multiplier-input" style="width:100%" value="mcxalerts@webprobity.com" placeholder="Verified sender email">
                     <input type="text" id="admEmailFromName" class="multiplier-input" style="width:100%" placeholder="Sender name">
                     <input type="password" id="admBrevoKey" class="multiplier-input" style="width:100%" placeholder="Brevo API key" autocomplete="new-password">
                     <input type="password" id="admMailjetKey" class="multiplier-input" style="width:100%" placeholder="Mailjet API key" autocomplete="new-password">
@@ -1661,6 +1661,11 @@
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
                         <button class="btn btn-primary" onclick="adminSaveMailjet()">Save Settings</button>
                         <button class="btn btn-secondary" onclick="adminTestMailjet()">Send Test Email</button>
+                    </div>
+                    <div class="card" style="margin-top:8px;background:#0b1424">
+                        <div style="display:flex;justify-content:space-between;align-items:center"><strong>📨 Email delivery log</strong><button class="btn btn-secondary" onclick="loadEmailLogs()">Refresh</button></div>
+                        <div id="admEmailLogStatus" style="font-size:11px;color:#94a3b8;margin:6px 0">No delivery attempts loaded.</div>
+                        <div id="admEmailLogBody" style="overflow:auto;max-height:220px;font-size:11px"></div>
                     </div>
                 </div>
             </div>
@@ -3339,12 +3344,13 @@
                 document.getElementById('admEmailDelayHours').value=v.delay_hours||0;
                 document.getElementById('admEmailDelayMinutes').value=v.delay_minutes||0;
                 toggleEmailDelayFields();
-                document.getElementById('admMailjetRecipient').value=v.recipient||'';
-                document.getElementById('admMailjetFrom').value=v.from_email||'';
+                document.getElementById('admMailjetRecipients').value=(v.recipients||[]).join(', ')||v.recipient||'';
+                document.getElementById('admMailjetFrom').value=v.from_email||'mcxalerts@webprobity.com';
                 document.getElementById('admEmailFromName').value=v.from_name||'NG Automation Bot';
                 document.getElementById('admBrevoKey').placeholder=v.brevo_api_key_set?'Saved Brevo key (blank keeps it)':'Brevo API key';
                 document.getElementById('admMailjetKey').placeholder=v.mailjet_api_key_set?'Saved Mailjet API key (blank keeps it)':'Mailjet API key';
                 document.getElementById('admMailjetSecret').placeholder=v.mailjet_secret_key_set?'Saved Mailjet secret (blank keeps it)':'Mailjet secret key';
+                loadEmailLogs();
             } catch(e) { console.error('Could not load email notification settings:',e); }
         }
         function toggleEmailDelayFields() {
@@ -3369,7 +3375,7 @@
                     delay_hours:document.getElementById('admEmailDelayHours').value,
                     delay_minutes:document.getElementById('admEmailDelayMinutes').value,
                     provider:document.getElementById('admEmailProvider').value,
-                    recipient:document.getElementById('admMailjetRecipient').value,from_email:document.getElementById('admMailjetFrom').value,
+                    recipients:document.getElementById('admMailjetRecipients').value,from_email:document.getElementById('admMailjetFrom').value,
                     from_name:document.getElementById('admEmailFromName').value,
                     brevo_api_key:document.getElementById('admBrevoKey').value,
                     mailjet_api_key:document.getElementById('admMailjetKey').value,
@@ -3381,6 +3387,16 @@
         async function adminTestMailjet() {
             try { const r=await fetch('/api/admin/email-notifications/test',{method:'POST'}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Email test failed'); alert(d.message); }
             catch(e) { alert(e.message); }
+        }
+        async function loadEmailLogs() {
+            const status=document.getElementById('admEmailLogStatus'), body=document.getElementById('admEmailLogBody');
+            if(!status||!body)return;
+            try {
+                const r=await fetch('/api/admin/email-notifications/logs?limit=100'); const d=await r.json();
+                if(!r.ok)throw new Error(d.message||'Could not load email logs');
+                const logs=d.logs||[]; status.textContent=logs.length?`${logs.length} recent delivery attempts`:'No delivery attempts recorded.';
+                body.innerHTML=logs.length?`<table style="width:100%;border-collapse:collapse"><thead><tr><th align="left">Time (IST)</th><th align="left">Status</th><th align="left">Provider</th><th align="left">Recipients</th><th align="left">Subject</th><th align="left">Error</th></tr></thead><tbody>${logs.map(x=>`<tr><td>${new Date(x.sent_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})}</td><td style="color:${x.status==='SENT'?'#10b981':x.status==='FAILED'?'#ef4444':'#fbbf24'}">${x.status}</td><td>${x.provider||''}</td><td>${(x.recipients||[]).join(', ')}</td><td>${x.subject||''}</td><td>${x.error||''}</td></tr>`).join('')}</tbody></table>`:'';
+            } catch(e) { status.textContent=e.message; }
         }
 
         function adminUpdateConfig() {

@@ -422,9 +422,16 @@ def refresh_market_data():
                     delay_seconds = (int(mail_cfg.get("delay_hours", 0)) * 3600 + int(mail_cfg.get("delay_minutes", 0)) * 60) \
                         if mail_cfg.get("delivery_mode") == "custom_delay" else 0
                     event = {"subject": subject, "message": message, "trend": observed_trend,
-                             "kind": kind, "due_at": time.time() + (delay_seconds or 60)}
+                             "kind": kind, "alert_type": alert_type,
+                             "due_at": time.time() + (delay_seconds or 60)}
                     if delay_seconds:
                         mail_cfg[pending_key] = event
+                    else:
+                        provider_cfg = load_provider_settings()
+                        provider_cfg["recipients"] = mail_cfg.get("recipients") or mail_cfg.get("recipient", "")
+                        if send_email_notification(subject, message, provider_cfg["recipients"],
+                                                    settings=provider_cfg, alert_type=alert_type):
+                            mail_cfg[f"last_notified_{kind.lower()}_trend"] = observed_trend
 
                 def emit_strategy_alert(alert_type, priority, observed_trend, subject, message,
                                        event_type, payload):
@@ -445,10 +452,6 @@ def refresh_market_data():
                     if len(seen) > 500:
                         for old_key in list(seen)[:len(seen) - 500]:
                             seen.pop(old_key, None)
-                    elif send_email_notification(subject, message, mail_cfg.get("recipient")):
-                        mail_cfg[f"last_notified_{kind.lower()}_trend"] = observed_trend
-                    else:
-                        mail_cfg[pending_key] = event
 
                 previous_confirmed = mail_cfg.get("last_observed_trend", "NEUTRAL")
                 if trend in ("BULLISH", "BEARISH", "NEUTRAL") and trend != previous_confirmed:
@@ -2450,6 +2453,10 @@ def admin_email_notifications():
     provider_settings = load_provider_settings()
     cfg = state_mgr.get_state().get("email_notification_config") or provider_settings.get("notifications", {})
     if request.method == 'GET':
+        recipients = cfg.get("recipients") or cfg.get("recipient", "")
+        if isinstance(recipients, str):
+            from src.notification_service import normalize_recipients
+            recipients = normalize_recipients(recipients)
         return jsonify({"enabled": cfg.get("enabled", False),
                         "notify_trends": cfg.get("notify_trends", True),
                         "notify_bullish": cfg.get("notify_bullish", True),
@@ -2465,16 +2472,24 @@ def admin_email_notifications():
                         "delivery_mode": cfg.get("delivery_mode", "immediate"),
                         "delay_hours": cfg.get("delay_hours", 0),
                         "delay_minutes": cfg.get("delay_minutes", 0),
-                        "recipient": cfg.get("recipient", ""),
+                        "recipient": ", ".join(recipients),
+                        "recipients": recipients,
                         "provider": provider_settings.get("provider", "mailjet"),
                         "from_email": provider_settings.get("from_email", ""),
                         "from_name": provider_settings.get("from_name", "NG Automation Bot"),
                         **provider_status(provider_settings)})
     data = request.get_json(silent=True) or {}
-    recipient = str(data.get("recipient", "")).strip()
-    from_email = str(data.get("from_email", provider_settings.get("from_email", ""))).strip()
-    if any(email and ("@" not in email or len(email) > 254) for email in (recipient, from_email)):
-        return jsonify({"status": "error", "message": "Enter a valid notification email."}), 400
+    from src.notification_service import normalize_recipients, DEFAULT_FROM_EMAIL
+    raw_recipients = data.get("recipients", data.get("recipient", ""))
+    recipient_parts = raw_recipients if isinstance(raw_recipients, list) else str(raw_recipients or "").replace(";", ",").replace("\n", ",").split(",")
+    recipient_parts = [str(email).strip() for email in recipient_parts if str(email).strip()]
+    recipients = normalize_recipients(recipient_parts)
+    if len(recipients) != len(recipient_parts):
+        return jsonify({"status": "error", "message": "Enter valid recipient email addresses."}), 400
+    recipient = ", ".join(recipients)
+    from_email = str(data.get("from_email", provider_settings.get("from_email") or DEFAULT_FROM_EMAIL)).strip()
+    if from_email and ("@" not in from_email or len(from_email) > 254):
+        return jsonify({"status": "error", "message": "Enter a valid verified sender email."}), 400
     provider = str(data.get("provider", provider_settings.get("provider", "mailjet"))).lower()
     if provider not in ("brevo", "mailjet"):
         return jsonify({"status": "error", "message": "Choose Brevo or Mailjet."}), 400
@@ -2512,7 +2527,8 @@ def admin_email_notifications():
                 "delivery_mode": delivery_mode,
                 "delay_hours": delay_hours,
                 "delay_minutes": delay_minutes,
-                "recipient": recipient})
+                "recipient": recipient,
+                "recipients": recipients})
     provider_settings["notifications"] = cfg
     try:
         save_provider_settings(provider_settings)
@@ -2521,6 +2537,15 @@ def admin_email_notifications():
     state_mgr.update("email_notification_config", cfg)
     state_mgr.add_log(f"{provider.title()} email notification settings updated", category="ADMIN", user=session.get('username'))
     return jsonify({"status": "success", "message": "Email notification settings saved."})
+
+@app.route('/api/admin/email-notifications/logs', methods=['GET'])
+@app.route('/api/admin/mailjet/logs', methods=['GET'])
+@login_required
+@role_required("ADMIN")
+def admin_email_notification_logs():
+    from src.database import UnifiedOrderManager
+    limit = request.args.get("limit", 100, type=int)
+    return jsonify({"logs": UnifiedOrderManager.get_instance().list_email_notification_logs(limit)})
 
 @app.route('/api/admin/email-notifications/test', methods=['POST'])
 @app.route('/api/admin/mailjet/test', methods=['POST'])
