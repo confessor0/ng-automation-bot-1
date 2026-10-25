@@ -420,6 +420,17 @@ class UnifiedOrderManager:
             conn.commit()
             return cursor.rowcount > 0
 
+    def get_simulation(self, simulation_id):
+        with sqlite3.connect(self.DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM simulations WHERE simulation_id = ?", (simulation_id,)).fetchone()
+        if not row:
+            return None
+        item = dict(row)
+        item["input_data"] = json.loads(item.get("input_data") or "{}")
+        item["result_data"] = json.loads(item.get("result_data") or "{}")
+        return item
+
     def save_email_notification_log(self, provider, subject, recipients, status,
                                      error=None, alert_type=None, metadata=None):
         with sqlite3.connect(self.DB_PATH) as conn:

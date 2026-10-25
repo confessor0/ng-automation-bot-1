@@ -1861,6 +1861,54 @@ def delete_simulation(simulation_id):
         return jsonify({"status": "error", "message": "Simulation not found"}), 404
     return jsonify({"status": "success", "simulation_id": simulation_id})
 
+@app.route('/api/simulations/<simulation_id>', methods=['GET'])
+@login_required
+def get_simulation(simulation_id):
+    from src.database import UnifiedOrderManager
+    row = UnifiedOrderManager.get_instance().get_simulation(simulation_id)
+    if not row:
+        return jsonify({"status": "error", "message": "Simulation not found"}), 404
+    return jsonify({"simulation": row})
+
+@app.route('/api/simulations/<simulation_id>/export', methods=['GET'])
+@login_required
+def export_simulation(simulation_id):
+    import csv
+    import io
+    from src.database import UnifiedOrderManager
+    row = UnifiedOrderManager.get_instance().get_simulation(simulation_id)
+    if not row:
+        return jsonify({"status": "error", "message": "Simulation not found"}), 404
+    output = io.StringIO(); writer = csv.writer(output)
+    writer.writerow(["Simulation", simulation_id]); writer.writerow(["Entry IST", row.get("entry_at")]); writer.writerow(["Exit IST", row.get("exit_at")])
+    writer.writerow([]); writer.writerow(["Contract", "Side", "Type", "Strike", "Quantity", "Entry", "Exit", "P&L"])
+    for leg in row.get("result_data", {}).get("legs", []):
+        writer.writerow([leg.get("symbol"), leg.get("side"), leg.get("instrument"), leg.get("strike"), leg.get("qty"), leg.get("entry_price"), leg.get("exit_price"), leg.get("pnl")])
+    writer.writerow([]); writer.writerow(["Total P&L", row.get("result_data", {}).get("total_pnl")])
+    return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": f"attachment; filename={simulation_id}.csv"})
+
+@app.route('/api/simulations/validate', methods=['POST'])
+@login_required
+def validate_simulation_basket():
+    data = request.get_json(silent=True) or {}; legs = data.get("legs") or []
+    errors, warnings = [], []
+    if not legs: errors.append("Add at least one basket leg.")
+    expiries = {str(item.get("expiry") or "").upper() for item in legs if item.get("type") != "FUT" and item.get("instrument") != "FUT"}
+    if len(expiries - {""}) > 1: errors.append("All option legs must use the same expiry.")
+    for index, leg in enumerate(legs, 1):
+        if str(leg.get("side") or "").upper() not in ("BUY", "SELL"): errors.append(f"Leg {index}: side must be BUY or SELL.")
+        if float(leg.get("qty") or 0) <= 0: errors.append(f"Leg {index}: quantity must be positive.")
+        if float(leg.get("price") or 0) < 0: errors.append(f"Leg {index}: price cannot be negative.")
+        kind = str(leg.get("type") or leg.get("instrument") or "OPT").upper()
+        if kind == "OPT" and (float(leg.get("strike") or 0) <= 0 or str(leg.get("opt") or leg.get("option_type") or "").upper() not in ("CE", "PE")):
+            errors.append(f"Leg {index}: option needs a valid CE/PE strike.")
+    shorts = [x for x in legs if str(x.get("side")).upper() == "SELL" and str(x.get("opt") or x.get("option_type") or "").upper() in ("CE", "PE")]
+    for short in shorts:
+        opt = str(short.get("opt") or short.get("option_type")).upper(); strike = float(short.get("strike") or 0)
+        protected = any(str(x.get("side")).upper() == "BUY" and str(x.get("opt") or x.get("option_type") or "").upper() == opt and ((opt == "CE" and float(x.get("strike") or 0) > strike) or (opt == "PE" and float(x.get("strike") or 0) < strike)) for x in legs)
+        if not protected: warnings.append(f"Short {opt} {strike:g} has no detected protective wing.")
+    return jsonify({"valid": not errors, "errors": errors, "warnings": warnings})
+
 
 @app.route('/api/simulations/plan/<int:event_id>', methods=['GET'])
 @login_required
