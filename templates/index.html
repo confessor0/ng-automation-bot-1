@@ -3425,7 +3425,7 @@
                 const r=await fetch('/api/admin/email-notifications/logs?limit=100'); const d=await r.json();
                 if(!r.ok)throw new Error(d.message||'Could not load email logs');
                 const logs=d.logs||[]; status.textContent=logs.length?`${logs.length} recent delivery attempts`:'No delivery attempts recorded.';
-                body.innerHTML=logs.length?`<table style="width:100%;border-collapse:collapse"><thead><tr><th align="left">Time (IST)</th><th align="left">Status</th><th align="left">Provider</th><th align="left">Recipients</th><th align="left">Subject</th><th align="left">Error</th></tr></thead><tbody>${logs.map(x=>`<tr><td>${new Date(x.sent_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})}</td><td style="color:${x.status==='SENT'?'#10b981':x.status==='FAILED'?'#ef4444':'#fbbf24'}">${x.status}</td><td>${x.provider||''}</td><td>${(x.recipients||[]).join(', ')}</td><td>${x.subject||''}</td><td>${x.error||''}</td></tr>`).join('')}</tbody></table>`:'';
+                body.innerHTML=logs.length?`<table style="width:100%;border-collapse:collapse"><thead><tr><th align="left">Time (IST)</th><th align="left">Status</th><th align="left">Provider</th><th align="left">Recipients</th><th align="left">Subject</th><th align="left">Error</th></tr></thead><tbody>${logs.map(x=>`<tr><td>${new Date(x.sent_at).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})}</td><td style="color:${(x.status==='SENT'||x.status==='ACCEPTED')?'#10b981':x.status==='FAILED'?'#ef4444':'#fbbf24'}">${x.status}</td><td>${x.provider||''}</td><td>${(x.recipients||[]).join(', ')}</td><td>${x.subject||''}</td><td>${x.error||''}</td></tr>`).join('')}</tbody></table>`:'';
             } catch(e) { status.textContent=e.message; }
         }
 

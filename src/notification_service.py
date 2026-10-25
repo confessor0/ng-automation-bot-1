@@ -117,8 +117,14 @@ def send_email_notification(subject, message, recipient, settings=None, alert_ty
                                     "To": [{"Email": email} for email in recipients], "Subject": subject,
                                     "TextPart": message}]}, timeout=10)
         response.raise_for_status()
-        settings["_last_status"] = "SENT"
-        _save_email_log(provider, subject, recipients, "SENT", None, alert_type)
+        provider_result = {}
+        try:
+            provider_result = response.json() or {}
+        except (TypeError, ValueError):
+            provider_result = {}
+        settings["_last_status"] = "ACCEPTED"
+        _save_email_log(provider, subject, recipients, "ACCEPTED", None, alert_type,
+                        {"recipient_count": len(recipients or []), "provider_response": provider_result})
         return True
     except Exception as exc:
         error = type(exc).__name__
@@ -134,12 +140,12 @@ def send_email_notification(subject, message, recipient, settings=None, alert_ty
         return False
 
 
-def _save_email_log(provider, subject, recipients, status, error=None, alert_type=None):
+def _save_email_log(provider, subject, recipients, status, error=None, alert_type=None, metadata=None):
     try:
         from src.database import UnifiedOrderManager
         UnifiedOrderManager.get_instance().save_email_notification_log(
             provider, subject, recipients, status, error=error, alert_type=alert_type,
-            metadata={"recipient_count": len(recipients or [])})
+            metadata=metadata or {"recipient_count": len(recipients or [])})
     except Exception as exc:
         print(f"Email notification log failed: {type(exc).__name__}")
 
