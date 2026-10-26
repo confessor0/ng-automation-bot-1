@@ -34,7 +34,10 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true",
-    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+    # Keep the signed browser session across normal browser restarts. The
+    # user can still explicitly log out; closing the browser must not log out.
+    PERMANENT_SESSION_LIFETIME=timedelta(days=3650),
+    SESSION_COOKIE_REFRESH_EACH_REQUEST=True,
 )
 
 # Disable caching for all responses
@@ -149,6 +152,8 @@ def _restore_authenticated_session():
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
+    if request.method == 'GET' and _restore_authenticated_session():
+        return redirect(url_for('home'))
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
