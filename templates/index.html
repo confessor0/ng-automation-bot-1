@@ -1799,6 +1799,24 @@
 
 
             <div class="card admin-wide">
+                <div class="card-title">👤 My Profile & App Session</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:center">
+                    <input id="myProfileUsername" class="multiplier-input" readonly placeholder="Username">
+                    <input id="myProfileName" class="multiplier-input" placeholder="Display name">
+                    <input id="myProfileEmail" class="multiplier-input" type="email" placeholder="Email address">
+                    <button class="btn btn-primary" onclick="saveMyProfile()">Save Profile</button>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center">
+                    <span id="myProfileStatus" style="font-size:11px;color:#94a3b8"></span>
+                    <button class="btn btn-danger" onclick="logout()">Log out of this browser</button>
+                    <button class="btn btn-secondary" onclick="loadMySessions()">Refresh sessions</button>
+                    <button class="btn btn-secondary" onclick="loadAllSessions()">Admin session list</button>
+                </div>
+                <div id="mySessionsList" style="font-size:11px;color:#94a3b8;margin-top:10px;overflow:auto"></div>
+                <div id="adminSessionsList" style="font-size:11px;color:#94a3b8;margin-top:10px;overflow:auto"></div>
+            </div>
+
+            <div class="card admin-wide">
                 <div class="card-title">🧩 Strategy Versions & Administration</div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
                     <input id="admStrategyVersionName" class="multiplier-input" placeholder="Version name">
@@ -1818,9 +1836,10 @@
                 <div id="admUsersList" style="font-size:11px;color:#94a3b8;margin-top:12px;overflow:auto"></div>
                 <div style="border-top:1px solid #1e293b;margin-top:12px;padding-top:12px">
                     <div style="font-weight:800;font-size:12px;margin-bottom:7px">🔐 Change my password</div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:center">
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:6px;align-items:center">
                         <input id="admCurrentPassword" type="password" class="multiplier-input" placeholder="Current password" autocomplete="current-password">
                         <input id="admNewPassword" type="password" class="multiplier-input" placeholder="New password (8+ chars)" autocomplete="new-password">
+                        <input id="admConfirmPassword" type="password" class="multiplier-input" placeholder="Confirm new password" autocomplete="new-password">
                         <button class="btn btn-secondary" onclick="changeAdminPassword()">Change Password</button>
                     </div>
                     <div id="admPasswordStatus" style="font-size:11px;color:#94a3b8;margin-top:6px"></div>
@@ -3695,6 +3714,28 @@
             const id=document.getElementById('admStrategyVersionList').value; if(!id)return alert('Select a version first'); if(!confirm('Restore this strategy configuration?'))return; const r=await fetch('/api/admin/strategy-versions/'+encodeURIComponent(id)+'/restore',{method:'POST'}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Could not restore version'); alert('Strategy version restored'); updateDashboard();
         }
         function adminEscape(value) { const m={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}; return String(value ?? '').replace(/[&<>"']/g, c => m[c]); }
+        async function loadMyProfile() {
+            try {
+                const r=await fetch('/api/user/profile'); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Could not load profile');
+                const u=d.user||{}; const set=(id,v)=>{const el=document.getElementById(id); if(el)el.value=v||'';};
+                set('myProfileUsername',u.username); set('myProfileName',u.name); set('myProfileEmail',u.email);
+            } catch(e) { const el=document.getElementById('myProfileStatus'); if(el)el.textContent=e.message; }
+        }
+        async function saveMyProfile() {
+            const status=document.getElementById('myProfileStatus');
+            try { const r=await fetch('/api/user/profile',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:document.getElementById('myProfileName').value,email:document.getElementById('myProfileEmail').value})}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Could not save profile'); status.textContent='Profile saved.'; status.style.color='#10b981'; }
+            catch(e) { status.textContent=e.message; status.style.color='#f87171'; }
+        }
+        async function loadMySessions() {
+            const el=document.getElementById('mySessionsList'); if(!el)return;
+            try { const r=await fetch('/api/auth/sessions'); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Could not load sessions'); const rows=(d.sessions||[]).map(s=>`<tr><td>${adminEscape(s.session_id)}</td><td>${new Date(s.last_seen).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})}</td><td>${adminEscape(s.ip_address||'-')}</td><td>${s.current?'CURRENT':`<button class="btn btn-secondary" style="padding:2px 6px;font-size:10px" onclick="revokeMySession('${adminEscape(s.session_id)}')">Revoke</button>`}</td></tr>`).join(''); el.innerHTML=`<b>My active sessions</b><table style="width:100%;margin-top:6px;border-collapse:collapse"><tr><th align="left">Session</th><th align="left">Last seen (IST)</th><th align="left">IP</th><th align="left">Status</th></tr>${rows||'<tr><td colspan="4">No active sessions</td></tr>'}</table>`; } catch(e) { el.textContent=e.message; }
+        }
+        async function revokeMySession(id) { const r=await fetch('/api/auth/sessions/'+encodeURIComponent(id),{method:'DELETE'}); const d=await r.json(); if(!r.ok)alert(d.message||'Could not revoke session'); loadMySessions(); }
+        async function loadAllSessions() {
+            const el=document.getElementById('adminSessionsList'); if(!el)return;
+            try { const r=await fetch('/api/admin/sessions'); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Admin access required'); const rows=(d.sessions||[]).map(s=>`<tr><td>${adminEscape(s.username)}</td><td>${adminEscape(s.session_id)}</td><td>${new Date(s.last_seen).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})}</td><td>${adminEscape(s.ip_address||'-')}</td><td><button class="btn btn-danger" style="padding:2px 6px;font-size:10px" onclick="revokeAllSession('${adminEscape(s.session_id)}')">Revoke</button></td></tr>`).join(''); el.innerHTML=`<b>All active sessions (Admin)</b><table style="width:100%;margin-top:6px;border-collapse:collapse"><tr><th align="left">User</th><th align="left">Session</th><th align="left">Last seen (IST)</th><th align="left">IP</th><th></th></tr>${rows||'<tr><td colspan="5">No active sessions</td></tr>'}</table>`; } catch(e) { el.textContent=e.message; }
+        }
+        async function revokeAllSession(id) { if(!confirm('Revoke this session?'))return; const r=await fetch('/api/admin/sessions/'+encodeURIComponent(id),{method:'DELETE'}); const d=await r.json(); if(!r.ok)alert(d.message||'Could not revoke session'); loadAllSessions(); loadMySessions(); }
         function clearAdminUserForm() { ['admUserName','admUserDisplay','admUserEmail','admUserPassword'].forEach(id => document.getElementById(id).value=''); document.getElementById('admUserRole').value='VIEWER'; document.getElementById('admUserActive').checked=true; }
         async function saveAdminUser() {
             try {
@@ -3708,7 +3749,7 @@
         async function resetAdminUserPassword(username) { const user=decodeURIComponent(username); if(!confirm(`Reset password for ${user}?`))return; const r=await fetch('/api/admin/users/'+encodeURIComponent(user)+'/reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); const d=await r.json(); if(!r.ok)return alert(d.message||'Could not reset password'); prompt('Temporary password — copy it and provide it securely to the user. It must be changed at next login.',d.temporary_password); loadAdminUsers(); }
         async function deleteAdminUser(username) { const user=decodeURIComponent(username); if(!confirm(`Delete user ${user}? This cannot be undone.`))return; const r=await fetch('/api/admin/users/'+encodeURIComponent(user),{method:'DELETE'}); const d=await r.json(); if(!r.ok)return alert(d.message||'Could not delete user'); loadAdminUsers(); }
         async function loadAdminUsers() { try { const r=await fetch('/api/admin/users'); const d=await r.json(); const el=document.getElementById('admUsersList'); if(!el)return; el.innerHTML=`<table style="width:100%;border-collapse:collapse"><thead><tr><th align="left">User</th><th align="left">Role</th><th align="left">Status</th><th align="left">Last login (IST)</th><th align="left">Actions</th></tr></thead><tbody>${(d.users||[]).map(u=>{const username=adminEscape(u.username||''); const encoded=encodeURIComponent(u.username||''); return `<tr><td>${adminEscape(u.name||u.username||u.id)}<br><small>${username} · ${adminEscape(u.email||'')}</small></td><td>${adminEscape(u.role)}</td><td style="color:${u.active?'#10b981':'#f87171'}">${u.active?'ACTIVE':'DISABLED'}</td><td>${u.last_login?new Date(u.last_login).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):'Never'}</td><td><button class="btn btn-secondary" style="padding:3px 6px;font-size:10px" onclick="resetAdminUserPassword('${encoded}')">Reset password</button> <button class="btn btn-secondary" style="padding:3px 6px;font-size:10px" onclick="setAdminUserStatus('${encoded}',${!u.active})">${u.active?'Disable':'Enable'}</button>${u.username!=='admin'?` <button class="btn btn-danger" style="padding:3px 6px;font-size:10px" onclick="deleteAdminUser('${encoded}')">Delete</button>`:''}</td></tr>`;}).join('')}</tbody></table>`; } catch(e) { console.error(e); } }
-        async function changeAdminPassword() { const status=document.getElementById('admPasswordStatus'); try { const current=document.getElementById('admCurrentPassword').value,newVal=document.getElementById('admNewPassword').value; if(!current||!newVal)throw new Error('Enter current and new password'); const r=await fetch('/api/user/change_password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password:current,new_password:newVal})}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Password change failed'); status.textContent='Password changed successfully.'; status.style.color='#10b981'; document.getElementById('admCurrentPassword').value=''; document.getElementById('admNewPassword').value=''; } catch(e) { status.textContent=e.message; status.style.color='#f87171'; } }
+        async function changeAdminPassword() { const status=document.getElementById('admPasswordStatus'); try { const current=document.getElementById('admCurrentPassword').value,newVal=document.getElementById('admNewPassword').value,confirm=document.getElementById('admConfirmPassword').value; if(!current||!newVal||!confirm)throw new Error('Enter current, new, and confirmation passwords'); const r=await fetch('/api/user/change_password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password:current,new_password:newVal,confirm_password:confirm})}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Password change failed'); status.textContent='Password changed successfully.'; status.style.color='#10b981'; document.getElementById('admCurrentPassword').value=''; document.getElementById('admNewPassword').value=''; document.getElementById('admConfirmPassword').value=''; } catch(e) { status.textContent=e.message; status.style.color='#f87171'; } }
 
         function adminUpdateConfig() {
             const data = {
@@ -3831,7 +3872,7 @@
         setInterval(updateClock, 1000);
 
         updateClock();
-        loadMailjetSettings(); loadStrategyVersions(); loadAdminUsers();
+        loadMailjetSettings(); loadStrategyVersions(); loadAdminUsers(); loadMyProfile(); loadMySessions();
         checkFyersCredentialStatus();
 
 

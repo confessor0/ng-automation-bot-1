@@ -159,7 +159,10 @@ def login():
         password = request.form.get('password')
 
         state_mgr = StateManager.get_instance()
-        token, user = state_mgr.user_manager.authenticate(username, password)
+        token, user = state_mgr.user_manager.authenticate(
+            username, password,
+            session_context={"ip_address": request.remote_addr, "user_agent": request.user_agent.string},
+        )
 
         if token:
             session.permanent = True
@@ -194,6 +197,7 @@ def login():
 
             return redirect(url_for('home'))
         else:
+            state_mgr.add_log(f"Login failed: {username or 'unknown'}", category="AUTH", user=username or "unknown")
             return render_template('login.html', error="Invalid Credentials")
 
     return render_template('login.html')
@@ -287,8 +291,15 @@ def mobile_device():
 def logout():
     u = session.get('username', 'Unknown')
     StateManager.get_instance().add_log(f"Logout: {u}", category="AUTH", user=u)
+    token = session.get("user_token")
+    manager = StateManager.get_instance().user_manager
+    if token:
+        manager.sessions.pop(token, None)
+        manager.session_records.pop(token, None)
     session.pop('user_token', None)
     session.pop('username', None)
+    session.pop('role', None)
+    session.pop('must_change_password', None)
     return redirect(url_for('login'))
 
 @app.route('/')
@@ -2818,6 +2829,10 @@ def change_password():
     data = request.get_json(silent=True) or {}
     current_password = str(data.get("current_password") or "")
     new_password = str(data.get("new_password") or "")
+    confirm_password = str(data.get("confirm_password") or "")
+
+    if confirm_password and new_password != confirm_password:
+        return jsonify({"status": "error", "message": "New passwords do not match"}), 400
 
     username = session.get('username')
     state_mgr = StateManager.get_instance()
@@ -2848,6 +2863,72 @@ def user_profile():
     return jsonify({"status": "success", "user": {
         key: value for key, value in user.items() if key not in ("password", "password_hash")
     }})
+
+@app.route('/api/user/profile', methods=['PATCH', 'PUT'])
+@login_required
+def update_user_profile():
+    username = session.get('username')
+    data = request.get_json(silent=True) or {}
+    manager = StateManager.get_instance().user_manager
+    ok, message = manager.update_profile(username, data.get("name"), data.get("email"))
+    if not ok:
+        return jsonify({"status": "error", "message": message}), 400
+    StateManager.get_instance().add_log(f"Profile updated for {username}", category="AUTH", user=username)
+    user = manager.users.get(username, {})
+    return jsonify({"status": "success", "message": message, "user": {
+        key: value for key, value in user.items() if key not in ("password", "password_hash")
+    }})
+
+@app.route('/api/auth/session', methods=['GET'])
+@login_required
+def auth_session():
+    username = session.get("username")
+    manager = StateManager.get_instance().user_manager
+    user = manager.users.get(username, {})
+    current_id = next((record.get("session_id") for token, record in manager.session_records.items() if token == session.get("user_token")), None)
+    current = next((item for item in manager.list_sessions(username) if item.get("session_id") == current_id), None)
+    if current:
+        current["current"] = True
+    return jsonify({"status": "success", "authenticated": True, "user": {
+        key: value for key, value in user.items() if key not in ("password", "password_hash")
+    }, "session": current})
+
+@app.route('/api/auth/logout', methods=['POST'])
+@login_required
+def api_logout():
+    username = session.get("username", "Unknown")
+    token = session.get("user_token")
+    manager = StateManager.get_instance().user_manager
+    if token:
+        manager.sessions.pop(token, None)
+        manager.session_records.pop(token, None)
+    session.clear()
+    StateManager.get_instance().add_log(f"Logout: {username}", category="AUTH", user=username)
+    return jsonify({"status": "success", "message": "Logged out"})
+
+@app.route('/api/auth/sessions', methods=['GET'])
+@login_required
+def auth_sessions():
+    username = session.get("username")
+    manager = StateManager.get_instance().user_manager
+    sessions = manager.list_sessions(username)
+    current_id = next((record.get("session_id") for token, record in manager.session_records.items() if token == session.get("user_token")), None)
+    for item in sessions:
+        item["current"] = item.get("session_id") == current_id
+    return jsonify({"status": "success", "sessions": sessions})
+
+@app.route('/api/auth/sessions/<session_id>', methods=['DELETE'])
+@login_required
+def revoke_auth_session(session_id):
+    username = session.get("username")
+    manager = StateManager.get_instance().user_manager
+    current_id = next((record.get("session_id") for token, record in manager.session_records.items() if token == session.get("user_token")), None)
+    if session_id == current_id:
+        return jsonify({"status": "error", "message": "Use logout to end the current session"}), 400
+    if not manager.revoke_session(session_id, username=username):
+        return jsonify({"status": "error", "message": "Session not found"}), 404
+    StateManager.get_instance().add_log(f"Session revoked for {username}", category="AUTH", user=username)
+    return jsonify({"status": "success", "message": "Session revoked"})
 
 @app.route('/api/admin/export_logs', methods=['GET'])
 @login_required
@@ -2941,6 +3022,23 @@ def admin_users():
     if not ok: return jsonify({"status": "error", "message": message}), 400
     StateManager.get_instance().add_log(f"User updated: {str(data.get('username')).lower()}", category="AUTH", user=session.get('username'))
     return jsonify({"status": "success", "message": message})
+
+@app.route('/api/admin/sessions', methods=['GET'])
+@login_required
+@role_required("ADMIN")
+def admin_sessions():
+    manager = StateManager.get_instance().user_manager
+    return jsonify({"status": "success", "sessions": manager.list_sessions()})
+
+@app.route('/api/admin/sessions/<session_id>', methods=['DELETE'])
+@login_required
+@role_required("ADMIN")
+def admin_revoke_session(session_id):
+    manager = StateManager.get_instance().user_manager
+    if not manager.revoke_session(session_id):
+        return jsonify({"status": "error", "message": "Session not found"}), 404
+    StateManager.get_instance().add_log(f"Admin revoked session {session_id}", category="AUTH", user=session.get('username'))
+    return jsonify({"status": "success", "message": "Session revoked"})
 
 @app.route('/api/admin/users/<username>/status', methods=['POST'])
 @login_required

@@ -46,6 +46,7 @@ class UserManager:
             storage_file = "/tmp/users.json" if os.environ.get("VERCEL") else "users.json"
         self.storage_file = storage_file
         self.sessions = {} # token -> user_id
+        self.session_records = {} # token -> non-secret session metadata
         self.load_users()
 
     def load_users(self):
@@ -78,10 +79,10 @@ class UserManager:
         except Exception as e:
             print(f"Error saving users: {e}")
 
-    def authenticate(self, username, password):
+    def authenticate(self, username, password, session_context=None):
         user = self.users.get(username)
         if user and user.get("active") and self._verify_password(user, password):
-            token = self.create_session(username)
+            token = self.create_session(username, session_context=session_context)
             # Migrate legacy plaintext credentials on the first successful login.
             if user.get("password") and not user.get("password_hash"):
                 user["password_hash"] = generate_password_hash(str(password))
@@ -91,7 +92,7 @@ class UserManager:
             return token, user
         return None, None
 
-    def create_session(self, username):
+    def create_session(self, username, session_context=None):
         """Create a process-local session token for an already validated user.
 
         Browser sessions are signed by Flask, while this token is used by the
@@ -100,6 +101,16 @@ class UserManager:
         """
         token = str(uuid.uuid4())
         self.sessions[token] = username
+        now = datetime.now().isoformat(timespec="seconds")
+        context = session_context or {}
+        self.session_records[token] = {
+            "session_id": "SES_" + uuid.uuid4().hex[:12].upper(),
+            "username": username,
+            "created_at": now,
+            "last_seen": now,
+            "ip_address": str(context.get("ip_address") or "unknown"),
+            "user_agent": str(context.get("user_agent") or "unknown")[:180],
+        }
         return token
 
     @staticmethod
@@ -127,7 +138,49 @@ class UserManager:
 
     def get_user_by_token(self, token):
         username = self.sessions.get(token)
+        if isinstance(username, dict):
+            username = username.get("username")
+        record = self.session_records.get(token)
+        if record:
+            record["last_seen"] = datetime.now().isoformat(timespec="seconds")
         return self.users.get(username)
+
+    def list_sessions(self, username=None):
+        items = []
+        for token, record in self.session_records.items():
+            if username and record.get("username") != username:
+                continue
+            item = dict(record)
+            item["current"] = False
+            items.append(item)
+        return sorted(items, key=lambda item: item.get("last_seen", ""), reverse=True)
+
+    def revoke_session(self, session_id, username=None):
+        for token, record in list(self.session_records.items()):
+            if record.get("session_id") != session_id:
+                continue
+            if username and record.get("username") != username:
+                return False
+            self.session_records.pop(token, None)
+            self.sessions.pop(token, None)
+            return True
+        return False
+
+    def update_profile(self, username, name=None, email=None):
+        if username not in self.users:
+            return False, "User not found"
+        if name is not None:
+            value = str(name).strip()
+            if not value:
+                return False, "Name cannot be empty"
+            self.users[username]["name"] = value[:120]
+        if email is not None:
+            value = str(email).strip()
+            if value and ("@" not in value or "." not in value.rsplit("@", 1)[-1]):
+                return False, "Enter a valid email address"
+            self.users[username]["email"] = value[:180]
+        self.save_users()
+        return True, "Profile updated"
 
     def change_password(self, username, new_password, keep_token=None):
         if username not in self.users:
@@ -180,8 +233,10 @@ class UserManager:
 
     def invalidate_sessions(self, username, keep_token=None):
         for token, session_username in list(self.sessions.items()):
-            if session_username == username and token != keep_token:
+            current_username = session_username.get("username") if isinstance(session_username, dict) else session_username
+            if current_username == username and token != keep_token:
                 self.sessions.pop(token, None)
+                self.session_records.pop(token, None)
 
     def reset_password(self, username, new_password=None):
         if username not in self.users:

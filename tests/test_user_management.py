@@ -83,6 +83,25 @@ class UserManagementTests(unittest.TestCase):
         self.assertNotIn("password_hash", body)
         self.assertNotIn("password123", body)
 
+    def test_user_can_update_profile_and_manage_sessions(self):
+        updated = self.client.patch("/api/user/profile", json={
+            "name": "Updated Admin", "email": "admin@example.com",
+        })
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.get_json()["user"]["name"], "Updated Admin")
+
+        sessions = self.client.get("/api/auth/sessions")
+        self.assertEqual(sessions.status_code, 200)
+        self.assertTrue(any(item["current"] for item in sessions.get_json()["sessions"]))
+        admin_sessions = self.client.get("/api/admin/sessions")
+        self.assertEqual(admin_sessions.status_code, 200)
+
+    def test_api_logout_clears_browser_session(self):
+        logged_out = self.client.post("/api/auth/logout")
+        self.assertEqual(logged_out.status_code, 200)
+        with self.client.session_transaction() as session:
+            self.assertNotIn("username", session)
+
 
 if __name__ == "__main__":
     unittest.main()
