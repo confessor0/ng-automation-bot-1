@@ -1757,15 +1757,25 @@
                     <select id="admStrategyVersionList" class="multiplier-input"><option value="">Select saved version</option></select>
                     <button class="btn btn-secondary" onclick="restoreStrategyVersion()">Restore Selected Version</button>
                 </div>
-                <div style="border-top:1px solid #1e293b;margin-top:12px;padding-top:12px;display:grid;grid-template-columns:repeat(5,1fr);gap:6px">
+                <div style="border-top:1px solid #1e293b;margin-top:12px;padding-top:12px;display:grid;grid-template-columns:1.1fr 1.2fr 1.4fr .9fr 1.2fr auto;gap:6px;align-items:center">
                     <input id="admUserName" class="multiplier-input" placeholder="Username">
                     <input id="admUserDisplay" class="multiplier-input" placeholder="Name">
                     <input id="admUserEmail" class="multiplier-input" placeholder="Email">
                     <select id="admUserRole" class="multiplier-input"><option>VIEWER</option><option>OPERATOR</option><option>RISK_MANAGER</option><option>ADMIN</option></select>
-                    <input id="admUserPassword" type="password" class="multiplier-input" placeholder="Password (new user)">
+                    <input id="admUserPassword" type="password" class="multiplier-input" placeholder="Password (8+ chars, letter + number)">
+                    <label style="font-size:11px;color:#94a3b8;white-space:nowrap"><input id="admUserActive" type="checkbox" checked> Active</label>
                 </div>
-                <button class="btn btn-secondary" style="margin-top:8px" onclick="saveAdminUser()">Save User</button>
-                <div id="admUsersList" style="font-size:11px;color:#94a3b8;margin-top:8px"></div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px"><button class="btn btn-primary" onclick="saveAdminUser()">Save / Update User</button><button class="btn btn-secondary" onclick="clearAdminUserForm()">Clear</button></div>
+                <div id="admUsersList" style="font-size:11px;color:#94a3b8;margin-top:12px;overflow:auto"></div>
+                <div style="border-top:1px solid #1e293b;margin-top:12px;padding-top:12px">
+                    <div style="font-weight:800;font-size:12px;margin-bottom:7px">🔐 Change my password</div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:6px;align-items:center">
+                        <input id="admCurrentPassword" type="password" class="multiplier-input" placeholder="Current password" autocomplete="current-password">
+                        <input id="admNewPassword" type="password" class="multiplier-input" placeholder="New password (8+ chars)" autocomplete="new-password">
+                        <button class="btn btn-secondary" onclick="changeAdminPassword()">Change Password</button>
+                    </div>
+                    <div id="admPasswordStatus" style="font-size:11px;color:#94a3b8;margin-top:6px"></div>
+                </div>
             </div>
 
             <!-- 2. Governance & Limits -->
@@ -3537,10 +3547,21 @@
         async function restoreStrategyVersion() {
             const id=document.getElementById('admStrategyVersionList').value; if(!id)return alert('Select a version first'); if(!confirm('Restore this strategy configuration?'))return; const r=await fetch('/api/admin/strategy-versions/'+encodeURIComponent(id)+'/restore',{method:'POST'}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Could not restore version'); alert('Strategy version restored'); updateDashboard();
         }
+        function adminEscape(value) { const m={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}; return String(value ?? '').replace(/[&<>"']/g, c => m[c]); }
+        function clearAdminUserForm() { ['admUserName','admUserDisplay','admUserEmail','admUserPassword'].forEach(id => document.getElementById(id).value=''); document.getElementById('admUserRole').value='VIEWER'; document.getElementById('admUserActive').checked=true; }
         async function saveAdminUser() {
-            const body={username:document.getElementById('admUserName').value,name:document.getElementById('admUserDisplay').value,email:document.getElementById('admUserEmail').value,role:document.getElementById('admUserRole').value,password:document.getElementById('admUserPassword').value}; const r=await fetch('/api/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Could not save user'); alert('User saved'); loadAdminUsers();
+            try {
+                const username=document.getElementById('admUserName').value.trim();
+                if(!username) throw new Error('Username is required');
+                const body={username,name:document.getElementById('admUserDisplay').value,email:document.getElementById('admUserEmail').value,role:document.getElementById('admUserRole').value,password:document.getElementById('admUserPassword').value,active:document.getElementById('admUserActive').checked};
+                const r=await fetch('/api/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Could not save user'); alert('User saved'); clearAdminUserForm(); loadAdminUsers();
+            } catch(e) { alert(e.message); }
         }
-        async function loadAdminUsers() { try { const r=await fetch('/api/admin/users'); const d=await r.json(); const el=document.getElementById('admUsersList'); if(el)el.innerHTML=(d.users||[]).map(u=>`${u.name||u.id} (${u.role}) · ${u.active?'ACTIVE':'DISABLED'} · ${u.email||''}`).join('<br>'); } catch(e) { console.error(e); } }
+        async function setAdminUserStatus(username, active) { const user=decodeURIComponent(username); const r=await fetch('/api/admin/users/'+encodeURIComponent(user)+'/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({active})}); const d=await r.json(); if(!r.ok)alert(d.message||'Could not change user status'); loadAdminUsers(); }
+        async function resetAdminUserPassword(username) { const user=decodeURIComponent(username); if(!confirm(`Reset password for ${user}?`))return; const r=await fetch('/api/admin/users/'+encodeURIComponent(user)+'/reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); const d=await r.json(); if(!r.ok)return alert(d.message||'Could not reset password'); prompt('Temporary password — copy it and provide it securely to the user. It must be changed at next login.',d.temporary_password); loadAdminUsers(); }
+        async function deleteAdminUser(username) { const user=decodeURIComponent(username); if(!confirm(`Delete user ${user}? This cannot be undone.`))return; const r=await fetch('/api/admin/users/'+encodeURIComponent(user),{method:'DELETE'}); const d=await r.json(); if(!r.ok)return alert(d.message||'Could not delete user'); loadAdminUsers(); }
+        async function loadAdminUsers() { try { const r=await fetch('/api/admin/users'); const d=await r.json(); const el=document.getElementById('admUsersList'); if(!el)return; el.innerHTML=`<table style="width:100%;border-collapse:collapse"><thead><tr><th align="left">User</th><th align="left">Role</th><th align="left">Status</th><th align="left">Last login (IST)</th><th align="left">Actions</th></tr></thead><tbody>${(d.users||[]).map(u=>{const username=adminEscape(u.username||''); const encoded=encodeURIComponent(u.username||''); return `<tr><td>${adminEscape(u.name||u.username||u.id)}<br><small>${username} · ${adminEscape(u.email||'')}</small></td><td>${adminEscape(u.role)}</td><td style="color:${u.active?'#10b981':'#f87171'}">${u.active?'ACTIVE':'DISABLED'}</td><td>${u.last_login?new Date(u.last_login).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):'Never'}</td><td><button class="btn btn-secondary" style="padding:3px 6px;font-size:10px" onclick="resetAdminUserPassword('${encoded}')">Reset password</button> <button class="btn btn-secondary" style="padding:3px 6px;font-size:10px" onclick="setAdminUserStatus('${encoded}',${!u.active})">${u.active?'Disable':'Enable'}</button>${u.username!=='admin'?` <button class="btn btn-danger" style="padding:3px 6px;font-size:10px" onclick="deleteAdminUser('${encoded}')">Delete</button>`:''}</td></tr>`;}).join('')}</tbody></table>`; } catch(e) { console.error(e); } }
+        async function changeAdminPassword() { const status=document.getElementById('admPasswordStatus'); try { const current=document.getElementById('admCurrentPassword').value,newVal=document.getElementById('admNewPassword').value; if(!current||!newVal)throw new Error('Enter current and new password'); const r=await fetch('/api/user/change_password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password:current,new_password:newVal})}); const d=await r.json(); if(!r.ok)throw new Error(d.message||'Password change failed'); status.textContent='Password changed successfully.'; status.style.color='#10b981'; document.getElementById('admCurrentPassword').value=''; document.getElementById('admNewPassword').value=''; } catch(e) { status.textContent=e.message; status.style.color='#f87171'; } }
 
         function adminUpdateConfig() {
             const data = {

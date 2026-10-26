@@ -3,10 +3,12 @@ import os
 import threading
 from datetime import datetime
 import uuid
+import secrets
+from werkzeug.security import check_password_hash, generate_password_hash
 
 # [NEW] Role Definitions
 ROLES = {
-    "ADMIN": ["VIEW_DASHBOARD", "EXECUTE_BENCHMARK", "MANUAL_SCALE", "EMERGENCY_ACTION", "CHANGE_LIMITS", "OVERRIDE_SIGNAL"],
+    "ADMIN": ["VIEW_DASHBOARD", "MANAGE_USERS", "EXECUTE_BENCHMARK", "MANUAL_SCALE", "EMERGENCY_ACTION", "CHANGE_LIMITS", "OVERRIDE_SIGNAL"],
     "RISK_MANAGER": ["VIEW_DASHBOARD", "EMERGENCY_ACTION"],
     "OPERATOR": ["VIEW_DASHBOARD", "EXECUTE_BENCHMARK"],
     "VIEWER": ["VIEW_DASHBOARD"]
@@ -78,42 +80,79 @@ class UserManager:
 
     def authenticate(self, username, password):
         user = self.users.get(username)
-        if user and user["password"] == password and user["active"]:
+        if user and user.get("active") and self._verify_password(user, password):
             token = str(uuid.uuid4())
             self.sessions[token] = username
+            # Migrate legacy plaintext credentials on the first successful login.
+            if user.get("password") and not user.get("password_hash"):
+                user["password_hash"] = generate_password_hash(str(password))
+                user.pop("password", None)
             user["last_login"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self.save_users()
             return token, user
         return None, None
 
+    @staticmethod
+    def _verify_password(user, password):
+        supplied = str(password or "")
+        stored_hash = user.get("password_hash")
+        if stored_hash:
+            try:
+                return check_password_hash(stored_hash, supplied)
+            except (TypeError, ValueError):
+                return False
+        # Existing installations may still have a plaintext password. Keep the
+        # value readable only for this compatibility check and migrate it after
+        # authentication succeeds.
+        return secrets.compare_digest(str(user.get("password") or ""), supplied)
+
+    @staticmethod
+    def validate_password(password):
+        value = str(password or "")
+        if len(value) < 8:
+            return False, "Password must be at least 8 characters"
+        if not any(ch.isalpha() for ch in value) or not any(ch.isdigit() for ch in value):
+            return False, "Password must contain at least one letter and one number"
+        return True, "Password meets policy"
+
     def get_user_by_token(self, token):
         username = self.sessions.get(token)
         return self.users.get(username)
 
-    def change_password(self, username, new_password):
+    def change_password(self, username, new_password, keep_token=None):
         if username not in self.users:
             return False, "User not found"
-        if len(new_password) < 6:
-            return False, "Password too short"
-        
-        self.users[username]["password"] = new_password
+        valid, message = self.validate_password(new_password)
+        if not valid:
+            return False, message
+        self.users[username]["password_hash"] = generate_password_hash(str(new_password))
+        self.users[username].pop("password", None)
+        self.users[username]["must_change_password"] = False
+        self.invalidate_sessions(username, keep_token=keep_token)
         self.save_users()
         return True, "Password updated"
 
     def public_users(self):
-        return [{k: v for k, v in user.items() if k != "password"} for user in self.users.values()]
+        return [dict({"username": username}, **{
+            k: v for k, v in user.items() if k not in ("password", "password_hash")
+        }) for username, user in self.users.items()]
 
     def create_or_update_user(self, username, name, email, role, password=None, active=True):
         username = str(username or "").strip().lower()
         if not username or role not in ROLES:
             return False, "Username and a valid role are required"
-        if username not in self.users and len(str(password or "")) < 6:
-            return False, "A new user requires a password of at least 6 characters"
+        if username not in self.users and not password:
+            return False, "A new user requires a password"
+        if password:
+            valid, message = self.validate_password(password)
+            if not valid:
+                return False, message
         current = self.users.get(username, {"id": "u_" + uuid.uuid4().hex[:10]})
         current.update({"name": str(name or username).strip(), "email": str(email or "").strip(),
                         "role": role, "active": bool(active)})
         if password:
-            current["password"] = str(password)
+            current["password_hash"] = generate_password_hash(str(password))
+            current.pop("password", None)
         current.setdefault("last_login", None)
         self.users[username] = current
         self.save_users()
@@ -121,9 +160,42 @@ class UserManager:
 
     def set_user_active(self, username, active):
         if username not in self.users: return False
+        if username == "admin" and not active:
+            return False
         self.users[username]["active"] = bool(active)
+        if not active:
+            self.invalidate_sessions(username)
         self.save_users()
         return True
+
+    def invalidate_sessions(self, username, keep_token=None):
+        for token, session_username in list(self.sessions.items()):
+            if session_username == username and token != keep_token:
+                self.sessions.pop(token, None)
+
+    def reset_password(self, username, new_password=None):
+        if username not in self.users:
+            return False, "User not found", None
+        temporary = str(new_password or (secrets.token_urlsafe(9) + "A1"))
+        valid, message = self.validate_password(temporary)
+        if not valid:
+            return False, message, None
+        self.users[username]["password_hash"] = generate_password_hash(temporary)
+        self.users[username].pop("password", None)
+        self.users[username]["must_change_password"] = True
+        self.invalidate_sessions(username)
+        self.save_users()
+        return True, "Password reset", temporary
+
+    def delete_user(self, username):
+        if username not in self.users:
+            return False, "User not found"
+        if username == "admin":
+            return False, "The primary admin account cannot be deleted"
+        self.invalidate_sessions(username)
+        del self.users[username]
+        self.save_users()
+        return True, "User deleted"
 
 class StateManager:
     _instance = None

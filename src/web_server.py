@@ -127,6 +127,7 @@ def login():
             session['user_token'] = token
             session['username'] = username
             session['role'] = user['role']
+            session['must_change_password'] = bool(user.get('must_change_password', False))
             state_mgr.add_log(f"Login Successful: {username}", category="AUTH", user=username)
 
             # Map RBAC Roles to UI Permission flags
@@ -2673,9 +2674,9 @@ def set_multiplier():
 @app.route('/api/user/change_password', methods=['POST'])
 @login_required
 def change_password():
-    data = request.json
-    current_password = data.get("current_password")
-    new_password = data.get("new_password")
+    data = request.get_json(silent=True) or {}
+    current_password = str(data.get("current_password") or "")
+    new_password = str(data.get("new_password") or "")
 
     username = session.get('username')
     state_mgr = StateManager.get_instance()
@@ -2685,13 +2686,27 @@ def change_password():
     if not user:
          return jsonify({"status": "error", "message": "Incorrect current password"}), 401
 
-    success, msg = state_mgr.user_manager.change_password(username, new_password)
+    success, msg = state_mgr.user_manager.change_password(
+        username, new_password, keep_token=session.get("user_token")
+    )
 
     if success:
+        session['must_change_password'] = False
         state_mgr.add_log(f"Password changed for {username}", category="AUTH", user=username)
         return jsonify({"status": "success", "message": "Password updated successfully"})
     else:
         return jsonify({"status": "error", "message": msg}), 400
+
+@app.route('/api/user/profile', methods=['GET'])
+@login_required
+def user_profile():
+    username = session.get('username')
+    user = StateManager.get_instance().user_manager.users.get(username)
+    if not user:
+        return jsonify({"status": "error", "message": "User not found"}), 404
+    return jsonify({"status": "success", "user": {
+        key: value for key, value in user.items() if key not in ("password", "password_hash")
+    }})
 
 @app.route('/api/admin/export_logs', methods=['GET'])
 @login_required
@@ -2792,7 +2807,52 @@ def admin_users():
 def admin_user_status(username):
     ok = StateManager.get_instance().user_manager.set_user_active(username, bool((request.get_json(silent=True) or {}).get("active")))
     if not ok: return jsonify({"status": "error", "message": "User not found"}), 404
+    StateManager.get_instance().add_log(
+        f"User status changed: {username} -> {bool((request.get_json(silent=True) or {}).get('active'))}",
+        category="AUTH", user=session.get('username')
+    )
     return jsonify({"status": "success"})
+
+@app.route('/api/admin/users/<username>', methods=['PATCH', 'DELETE'])
+@login_required
+@role_required("ADMIN")
+def admin_user_detail(username):
+    manager = StateManager.get_instance().user_manager
+    username = str(username or '').strip().lower()
+    if request.method == 'DELETE':
+        ok, message = manager.delete_user(username)
+        if not ok:
+            return jsonify({"status": "error", "message": message}), 400 if username == 'admin' else 404
+        StateManager.get_instance().add_log(f"User deleted: {username}", category="AUTH", user=session.get('username'))
+        return jsonify({"status": "success", "message": message})
+    if username not in manager.users:
+        return jsonify({"status": "error", "message": "User not found"}), 404
+    data = request.get_json(silent=True) or {}
+    current = manager.users[username]
+    ok, message = manager.create_or_update_user(
+        username, data.get("name", current.get("name")), data.get("email", current.get("email")),
+        data.get("role", current.get("role", "VIEWER")), data.get("password"),
+        data.get("active", current.get("active", True))
+    )
+    if not ok:
+        return jsonify({"status": "error", "message": message}), 400
+    StateManager.get_instance().add_log(f"User edited: {username}", category="AUTH", user=session.get('username'))
+    return jsonify({"status": "success", "message": message,
+                    "user": next(u for u in manager.public_users() if u.get('id') == current.get('id'))})
+
+@app.route('/api/admin/users/<username>/reset-password', methods=['POST'])
+@login_required
+@role_required("ADMIN")
+def admin_reset_user_password(username):
+    data = request.get_json(silent=True) or {}
+    manager = StateManager.get_instance().user_manager
+    ok, message, temporary = manager.reset_password(username, data.get('new_password'))
+    if not ok:
+        return jsonify({"status": "error", "message": message}), 400 if message != "User not found" else 404
+    StateManager.get_instance().add_log(f"Password reset for user: {username}", category="AUTH", user=session.get('username'))
+    return jsonify({"status": "success", "message": message,
+                    "username": str(username).lower(), "temporary_password": temporary,
+                    "must_change_password": True})
 
 @app.route('/api/admin/audit', methods=['GET'])
 @login_required
