@@ -1039,10 +1039,6 @@ def refresh_market_data():
                 except (TypeError, ValueError, IndexError):
                     pass
                 theta_high = days_to_expiry is not None and days_to_expiry <= 12
-                preferred_strategy = (
-                    configured_strategy if configured_strategy in ("STRATEGY_1", "STRATEGY_2")
-                    else ("STRATEGY_1" if trend in ("BULLISH", "BEARISH") else "STRATEGY_2")
-                )
                 strategy1_candidate = build_recommendation(
                     trend=trend, signal_status=details.get("signal_status", "NO_SIGNAL"),
                     cmp=ltp, atm_strike=atm_strike, expiry=expiry,
@@ -1063,15 +1059,39 @@ def refresh_market_data():
                             leg["premium"] = round(float(ltp or 0.0), 4)
                         elif not leg.get("premium") and leg.get("symbol"):
                             leg["premium"] = round(float(plan_quote(leg["symbol"])), 4)
+                atm_ce_premium = float(plan_quote(ce_for_plan) or 0.0)
+                atm_pe_premium = float(plan_quote(pe_for_plan) or 0.0)
+                combined_atm_premium = atm_ce_premium + atm_pe_premium
+                premium_pct = (combined_atm_premium / float(ltp) * 100.0) if ltp else None
+                premium_threshold_pct = 2.0
+                premium_available = atm_ce_premium > 0 and atm_pe_premium > 0 and premium_pct is not None
+                premium_high = premium_available and premium_pct >= premium_threshold_pct
+                premium_regime = "HIGH_PREMIUM" if premium_high else ("LOW_PREMIUM" if premium_available else "UNAVAILABLE")
+                preferred_strategy = (
+                    configured_strategy if configured_strategy in ("STRATEGY_1", "STRATEGY_2")
+                    else ("STRATEGY_2" if premium_high else "STRATEGY_1" if premium_available else
+                          ("STRATEGY_1" if trend in ("BULLISH", "BEARISH") else "STRATEGY_2"))
+                )
+                rec_position["premium_context"] = {
+                    "atm_ce": round(atm_ce_premium, 4), "atm_pe": round(atm_pe_premium, 4),
+                    "combined": round(combined_atm_premium, 4),
+                    "percent_of_underlying": round(premium_pct, 2) if premium_pct is not None else None,
+                    "threshold_percent": premium_threshold_pct, "regime": premium_regime,
+                    "rule": "Combined ATM premium >= 2% of underlying prefers Strategy 2; below 2% prefers Strategy 1."
+                }
                 rec_position["theta_context"] = {
                     "days_to_expiry": round(days_to_expiry, 1) if days_to_expiry is not None else None,
                     "regime": "HIGH_THETA" if theta_high else "NORMAL_THETA",
-                    "rule": "Prefer Strategy 2 when <= 12 days to expiry and the market is not directionally confirmed."
+                    "rule": "High theta supports Strategy 2 near expiry; premium regime remains the primary preference rule."
                 }
                 rec_position["preferred_strategy"] = preferred_strategy
                 rec_position["preference_reason"] = (
+                    "Combined ATM premium is high, so the protected Strategy 2 basket is preferred."
+                    if preferred_strategy == "STRATEGY_2" and premium_high else
+                    "Combined ATM premium is below the threshold, so Strategy 1 is preferred."
+                    if preferred_strategy == "STRATEGY_1" and premium_available else
                     "Confirmed bullish/bearish MA9 alignment favors the directional Strategy 1 basket."
-                    if preferred_strategy == "STRATEGY_1" else
+                    if preferred_strategy == "STRATEGY_1" and trend in ("BULLISH", "BEARISH") else
                     "High theta / near expiry favors the protected Strategy 2 consolidation basket."
                     if theta_high else
                     "No confirmed direction; the protected Strategy 2 basket is the dynamic primary."

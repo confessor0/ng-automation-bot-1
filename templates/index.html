@@ -4094,7 +4094,7 @@
                 html += `<div style="margin-top:20px;padding-top:16px;border-top:1px solid rgba(255,255,255,.1);">
                     <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
                         <div style="font-size:11px;font-weight:800;color:#64748b;text-transform:uppercase;">⚖️ Strategy comparison and preferred selection</div>
-                        <div style="font-size:11px;color:#94a3b8;">Theta: <b style="color:${theta.regime === 'HIGH_THETA' ? '#fbbf24' : '#cbd5e1'};">${theta.regime || 'UNKNOWN'}</b>${theta.days_to_expiry != null ? ` · ${theta.days_to_expiry} days to expiry` : ''}</div>
+                        <div style="font-size:11px;color:#94a3b8;">Premium: <b style="color:${(rp.premium_context?.regime === 'HIGH_PREMIUM') ? '#fbbf24' : '#cbd5e1'};">${rp.premium_context?.regime || 'UNKNOWN'}</b>${rp.premium_context?.combined != null ? ` · ₹${Number(rp.premium_context.combined).toFixed(2)} (${Number(rp.premium_context.percent_of_underlying || 0).toFixed(2)}%)` : ''} · Theta: <b style="color:${theta.regime === 'HIGH_THETA' ? '#fbbf24' : '#cbd5e1'};">${theta.regime || 'UNKNOWN'}</b>${theta.days_to_expiry != null ? ` · ${theta.days_to_expiry} days to expiry` : ''}</div>
                     </div>
                     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;">${optionCards}</div>
                     <div style="margin-top:10px;font-size:12px;color:#fbbf24;">Preferred: <b>${rp.preferred_strategy || rp.strategy || 'WAIT'}</b> · ${rp.preference_reason || rp.selection_explanation || ''}</div>
