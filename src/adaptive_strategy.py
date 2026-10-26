@@ -126,7 +126,7 @@ def build_recommendation(
         label = "Trending Markets — Bearish"
         rationale = "Completed ATM CE close is below MA9 and ATM PE close is above MA9."
     else:
-        return _wait("STRATEGY_1", "Signals are neutral; use the protected consolidation structure only when range conditions and premiums are confirmed.", cmp, atm_strike, expiry, signal_status)
+        return _wait("STRATEGY_2", "The dynamic basket is anchored to Strategy 2; a protected consolidation basket is shown when the market is not directionally confirmed.", cmp, atm_strike, expiry, signal_status)
 
     for leg in legs:
         if leg["instrument"] == "FUT":

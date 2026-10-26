@@ -1306,7 +1306,7 @@
                         <div style="font-size:12px;color:#cbd5e1;line-height:1.55;margin-top:5px;">Bearish: buy ITM CE hedge 12, sell futures 6, buy protective ITM PE 6, sell ATM CE 4, sell ATM PE 4.</div>
                     </div>
                     <div style="padding:14px;border-radius:8px;background:rgba(96,165,250,0.06);border:1px solid rgba(96,165,250,0.18);">
-                        <div style="font-weight:800;color:#60a5fa;margin-bottom:7px;">Strategy 2 · Consolidation</div>
+                        <div style="font-weight:800;color:#60a5fa;margin-bottom:7px;">Strategy 2 · Consolidation (Dynamic Primary)</div>
                         <div style="font-size:12px;color:#cbd5e1;line-height:1.55;">Sell ATM CE and PE 10 each. Buy 10-lot hedges at S − (CE+PE premium) and S + (CE+PE premium), rounded to valid strikes.</div>
                     </div>
                 </div>
@@ -1676,9 +1676,9 @@
                     </label>
                     <label for="activeSignalStrategy" style="font-size:12px;color:#cbd5e1;">Strategy selection</label>
                     <select id="activeSignalStrategy" class="multiplier-input" onchange="setActiveSignalStrategy(this.value)">
-                        <option value="AUTO">Adaptive · Select from confirmed trend/range</option>
+                        <option value="AUTO">Dynamic · Strategy 2 primary; Strategy 1 on confirmed trend</option>
                         <option value="STRATEGY_1">Strategy 1 · Trending markets</option>
-                        <option value="STRATEGY_2">Strategy 2 · Consolidation markets</option>
+                        <option value="STRATEGY_2">Strategy 2 · Consolidation markets (primary)</option>
                     </select>
                 </div>
             </div>
@@ -2080,7 +2080,7 @@
                     if (data.admin_config && document.activeElement.tagName !== 'INPUT') {
                         const ac = data.admin_config;
                         if (document.getElementById('chkNewsRisk')) document.getElementById('chkNewsRisk').checked = !!ac.news_risk_enabled;
-                        if (document.getElementById('activeSignalStrategy')) document.getElementById('activeSignalStrategy').value = ac.active_strategy || 'STRATEGY_1';
+                        if (document.getElementById('activeSignalStrategy')) document.getElementById('activeSignalStrategy').value = ac.active_strategy || 'AUTO';
                         if (document.getElementById('admMaxAdj')) document.getElementById('admMaxAdj').value = ac.max_adjustments_per_day;
                         if (document.getElementById('admSustain')) document.getElementById('admSustain').value = ac.sustain_time_hours;
                         if (document.getElementById('admObsDays')) document.getElementById('admObsDays').value = ac.observation_period_days;
@@ -2121,7 +2121,7 @@
                 } else if (exec && exec.basket_id && !['COMPLETED','CANCELLED'].includes(exec.status)) {
                     basket.textContent = `Active basket: ${exec.basket_id} · ${exec.status || 'PENDING'}. Open Master Order Console to review.`;
                 } else {
-                    basket.textContent = 'Active basket: none. A basket appears after a confirmed signal and validation.';
+                    basket.textContent = 'Dynamic basket: Strategy 2 is primary; waiting for a valid consolidation quote or confirmed directional signal.';
                 }
             }
         }
@@ -2182,7 +2182,7 @@
                     if (data.admin_config && document.activeElement.tagName !== 'INPUT') {
                         const ac = data.admin_config;
                         if (document.getElementById('chkNewsRisk')) document.getElementById('chkNewsRisk').checked = !!ac.news_risk_enabled;
-                        if (document.getElementById('activeSignalStrategy')) document.getElementById('activeSignalStrategy').value = ac.active_strategy || 'STRATEGY_1';
+                        if (document.getElementById('activeSignalStrategy')) document.getElementById('activeSignalStrategy').value = ac.active_strategy || 'AUTO';
                         if (document.getElementById('admMaxAdj')) document.getElementById('admMaxAdj').value = ac.max_adjustments_per_day;
                         if (document.getElementById('admSustain')) document.getElementById('admSustain').value = ac.sustain_time_hours;
                         if (document.getElementById('admObsDays')) document.getElementById('admObsDays').value = ac.observation_period_days;

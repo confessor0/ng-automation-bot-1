@@ -88,6 +88,19 @@ class SimulationEngineTests(unittest.TestCase):
         self.assertFalse(recommendation["trade_approved"])
         self.assertEqual(recommendation["status"], "CONSIDER")
 
+    def test_strategy_two_can_be_primary_for_a_directional_market(self):
+        recommendation = build_recommendation(
+            trend="BULLISH", signal_status="ADMIN_STRATEGY_2", cmp=300,
+            atm_strike=300, expiry="26NOV", consolidation=True,
+            quote=lambda _symbol: 8.0,
+            symbol_builder=lambda _base, kind, expiry, strike, option_type: f"{kind}-{expiry}-{strike}-{option_type}",
+        )
+        self.assertEqual(recommendation["strategy"], "STRATEGY_2")
+        self.assertEqual(recommendation["direction"], "NEUTRAL")
+        self.assertEqual([(leg["action"], leg["strike"], leg["option_type"]) for leg in recommendation["legs"]], [
+            ("SELL", 300, "PE"), ("SELL", 300, "CE"), ("BUY", 285, "PE"), ("BUY", 315, "CE")
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

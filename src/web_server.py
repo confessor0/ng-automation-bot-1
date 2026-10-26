@@ -990,6 +990,17 @@ def refresh_market_data():
                         return float(option_quotes.get(trading_symbol) or 0.0)
                     except (TypeError, ValueError):
                         return 0.0
+                # AUTO is the dynamic mode: Strategy 2 is the primary basket
+                # and Strategy 1 is selected only after a confirmed direction.
+                configured_strategy = str(
+                    (state_mgr.get_state().get("admin_config") or {}).get("active_strategy") or "AUTO"
+                ).upper()
+                if configured_strategy not in ("AUTO", "STRATEGY_1", "STRATEGY_2"):
+                    configured_strategy = "AUTO"
+                basket_consolidation = (
+                    configured_strategy == "STRATEGY_2"
+                    or (configured_strategy == "AUTO" and trend not in ("BULLISH", "BEARISH"))
+                )
                 rec_position = build_recommendation(
                     trend=trend,
                     signal_status=details.get("signal_status", "NO_SIGNAL"),
@@ -1000,7 +1011,14 @@ def refresh_market_data():
                     quote=plan_quote,
                     symbol_builder=construct_symbol,
                     futures_confirmation=details.get("futures_confirmation", "UNKNOWN"),
-                    consolidation=(trend == "NEUTRAL"),
+                    consolidation=basket_consolidation,
+                )
+                rec_position["selection_mode"] = configured_strategy
+                rec_position["dynamic_primary_strategy"] = "STRATEGY_2"
+                rec_position["selection_explanation"] = (
+                    "Strategy 2 is the primary dynamic basket; confirmed bullish/bearish trends use Strategy 1."
+                    if configured_strategy == "AUTO" else
+                    f"Admin selected {configured_strategy}; the basket is built from that strategy."
                 )
                 # A futures leg uses the current underlying LTP. Every
                 # displayed leg receives an explicit limit price so the UI
