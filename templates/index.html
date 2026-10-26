@@ -2662,7 +2662,7 @@
                         tile.classList.add('selected');
                         const details = event.payload?.details || {};
                         if (selection) selection.textContent = `${date} IST · Confirmed ${trend} · CE ${details.ce_close ?? '—'} / MA9 ${details.ce_ma9 ?? '—'} · PE ${details.pe_close ?? '—'} / MA9 ${details.pe_ma9 ?? '—'}`;
-                        const row = [...document.querySelectorAll('#strategyEventBody tr')].find(item => item.dataset.candleDate === date && item.dataset.scanId === scanId);
+                        const row = [...document.querySelectorAll('#strategyEventBody tr')].find(item => item.dataset.candleDate === date);
                         document.querySelectorAll('#strategyEventBody tr').forEach(item => item.classList.remove('journal-selected-row'));
                         if (row) { row.classList.add('journal-selected-row'); row.scrollIntoView({behavior:'smooth', block:'center'}); }
                     });
@@ -2705,7 +2705,11 @@
                     const rawEvents = data.events || [];
                     const allSignals = rawEvents.filter(e => e.event_type === 'HISTORICAL_SIGNAL');
                     const scanId = allSignals[0]?.scan_id || allSignals[0]?.payload?.scan_id;
-                    const scanSignals = allSignals.filter(e => (e.scan_id || e.payload?.scan_id) === scanId);
+                    // Keep prior completed candles visible when a later scan
+                    // adds or updates a newer date. The database upserts the
+                    // same candle key, so this is a unique rolling window
+                    // across all saved scans rather than one scan run.
+                    const scanSignals = allSignals;
                     const seenCandleDates = new Set();
                     const signals = scanSignals.filter(e => {
                         const date = String(e.candle_at || e.payload?.date || '').slice(0, 10);
@@ -2714,7 +2718,7 @@
                         return true;
                     });
                     const changesByDate = new Map();
-                    rawEvents.filter(e => e.event_type === 'HISTORICAL_TREND_CHANGE' && (e.scan_id || e.payload?.scan_id) === scanId).forEach(e => {
+                    rawEvents.filter(e => e.event_type === 'HISTORICAL_TREND_CHANGE').forEach(e => {
                         const date = String(e.candle_at || e.payload?.date || '').slice(0, 10);
                         if (/^\d{4}-\d{2}-\d{2}$/.test(date) && !changesByDate.has(date)) changesByDate.set(date, e);
                     });
