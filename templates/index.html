@@ -1975,7 +1975,11 @@
         document.addEventListener('DOMContentLoaded', () => {
             mountDashboardJournalMirror();
             startDataOrchestrator();
-            // Initial loads (local state only, no API calls)
+            // Hydrate the journal from durable database records immediately.
+            // This is read-only and does not consume Fyers data; new market
+            // records are fetched only when the user runs a scan or refreshes.
+            pollStrategyEvents();
+            pollStrategyScans();
 
         });
 
@@ -2749,7 +2753,7 @@
             // Fetch enough raw audit rows to build a complete 20-day view.
             // Live analysis events and separate trend-change rows are merged
             // below so they do not consume the visible journal limit.
-            fetch('/api/strategy/events?limit=100')
+            fetch('/api/strategy/events?limit=10000')
                 .then(r => r.json()).then(data => {
                     const bodies = journalTargets('strategyEventBody');
                     if (!bodies.length) return;
@@ -2761,6 +2765,16 @@
                     // same candle key, so this is a unique rolling window
                     // across all saved scans rather than one scan run.
                     const scanSignals = allSignals;
+                    // The journal table is intentionally capped at twenty
+                    // unique recent candle dates, but the calendar must keep
+                    // every persisted historical candle available for review.
+                    const calendarDates = new Set();
+                    const calendarSignals = allSignals.filter(e => {
+                        const date = String(e.candle_at || e.payload?.date || '').slice(0, 10);
+                        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || calendarDates.has(date)) return false;
+                        calendarDates.add(date);
+                        return true;
+                    });
                     const seenCandleDates = new Set();
                     const signals = scanSignals.filter(e => {
                         const date = String(e.candle_at || e.payload?.date || '').slice(0, 10);
@@ -2804,7 +2818,7 @@
                     journalTargets('journalLatestConfirmation').forEach(el => { el.textContent = confirmation; });
                     const todayIst = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
                     const potential = (data.events || []).find(e => e.event_type === 'INTRADAY_TREND_CHANGE' && String(e.occurred_at || '').slice(0, 10) === todayIst && Date.now() - new Date(e.occurred_at).getTime() < 30 * 60000 && e.payload?.potential_trend && e.payload.potential_trend !== latest?.trend);
-                    renderTrendCalendar(signals, potential, scanId);
+                    renderTrendCalendar(calendarSignals, potential, scanId);
                     if (!displayEvents.length) { bodies.forEach(body => { body.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#64748b;padding:20px;">No completed-candle records recorded yet.</td></tr>'; }); return; }
                     const bodyHtml = displayEvents.map(e => {
                     const p = e.payload || {};

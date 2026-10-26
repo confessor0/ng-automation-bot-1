@@ -369,7 +369,7 @@ class UnifiedOrderManager:
         if where:
             query += " WHERE " + " AND ".join(where)
         query += " ORDER BY occurred_at DESC, id DESC LIMIT ?"
-        params.append(max(1, min(int(limit or 100), 1000)))
+        params.append(max(1, min(int(limit or 1000), 10000)))
         with sqlite3.connect(self.DB_PATH) as conn:
             conn.row_factory = sqlite3.Row
             rows = [dict(row) for row in conn.execute(query, params).fetchall()]

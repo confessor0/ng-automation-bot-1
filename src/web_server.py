@@ -1604,7 +1604,7 @@ def get_strategy_events():
     from src.database import UnifiedOrderManager
     db = UnifiedOrderManager.get_instance()
     events = db.list_strategy_events(
-        limit=request.args.get('limit', 100, type=int),
+        limit=min(request.args.get('limit', 1000, type=int), 10000),
         symbol=request.args.get('symbol'),
         event_type=request.args.get('event_type'),
         start_date=request.args.get('start_date'),
