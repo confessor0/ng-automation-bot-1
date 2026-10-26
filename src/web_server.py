@@ -1020,6 +1020,70 @@ def refresh_market_data():
                     if configured_strategy == "AUTO" else
                     f"Admin selected {configured_strategy}; the basket is built from that strategy."
                 )
+                # Keep both canonical baskets visible so the operator can
+                # compare them before approving the preferred one. Strategy 1
+                # is preferred for confirmed direction; Strategy 2 is
+                # preferred for neutral/range conditions where theta decay is
+                # attractive (the first 10-12 days before expiry).
+                from calendar import month_abbr
+                days_to_expiry = None
+                try:
+                    expiry_year = 2000 + int(str(expiry)[:2])
+                    expiry_month = list(month_abbr).index(str(expiry)[2:5].title())
+                    expiry_at = datetime(expiry_year, expiry_month, int(inst_config.get("expiry_day", 24)), 23, 30)
+                    if getattr(TIMEZONE, "localize", None):
+                        expiry_at = TIMEZONE.localize(expiry_at)
+                    else:
+                        expiry_at = expiry_at.replace(tzinfo=TIMEZONE)
+                    days_to_expiry = max(0, (expiry_at - datetime.now(TIMEZONE)).total_seconds() / 86400)
+                except (TypeError, ValueError, IndexError):
+                    pass
+                theta_high = days_to_expiry is not None and days_to_expiry <= 12
+                preferred_strategy = (
+                    configured_strategy if configured_strategy in ("STRATEGY_1", "STRATEGY_2")
+                    else ("STRATEGY_1" if trend in ("BULLISH", "BEARISH") else "STRATEGY_2")
+                )
+                strategy1_candidate = build_recommendation(
+                    trend=trend, signal_status=details.get("signal_status", "NO_SIGNAL"),
+                    cmp=ltp, atm_strike=atm_strike, expiry=expiry,
+                    option_interval=inst_config.get("strike_interval", 5), quote=plan_quote,
+                    symbol_builder=construct_symbol, futures_confirmation=details.get("futures_confirmation", "UNKNOWN"),
+                    consolidation=False,
+                )
+                strategy2_candidate = build_recommendation(
+                    trend=trend, signal_status=details.get("signal_status", "NO_SIGNAL"),
+                    cmp=ltp, atm_strike=atm_strike, expiry=expiry,
+                    option_interval=inst_config.get("strike_interval", 5), quote=plan_quote,
+                    symbol_builder=construct_symbol, futures_confirmation=details.get("futures_confirmation", "UNKNOWN"),
+                    consolidation=True,
+                )
+                for candidate in (strategy1_candidate, strategy2_candidate):
+                    for leg in candidate.get("legs", []):
+                        if leg.get("instrument") == "FUT":
+                            leg["premium"] = round(float(ltp or 0.0), 4)
+                        elif not leg.get("premium") and leg.get("symbol"):
+                            leg["premium"] = round(float(plan_quote(leg["symbol"])), 4)
+                rec_position["theta_context"] = {
+                    "days_to_expiry": round(days_to_expiry, 1) if days_to_expiry is not None else None,
+                    "regime": "HIGH_THETA" if theta_high else "NORMAL_THETA",
+                    "rule": "Prefer Strategy 2 when <= 12 days to expiry and the market is not directionally confirmed."
+                }
+                rec_position["preferred_strategy"] = preferred_strategy
+                rec_position["preference_reason"] = (
+                    "Confirmed bullish/bearish MA9 alignment favors the directional Strategy 1 basket."
+                    if preferred_strategy == "STRATEGY_1" else
+                    "High theta / near expiry favors the protected Strategy 2 consolidation basket."
+                    if theta_high else
+                    "No confirmed direction; the protected Strategy 2 basket is the dynamic primary."
+                )
+                rec_position["strategy_options"] = [
+                    {"strategy": "STRATEGY_1", "label": "Strategy 1 · Trending", "preferred": preferred_strategy == "STRATEGY_1",
+                     "status": strategy1_candidate.get("status"), "direction": strategy1_candidate.get("direction"),
+                     "rationale": strategy1_candidate.get("rationale"), "legs": strategy1_candidate.get("legs", [])},
+                    {"strategy": "STRATEGY_2", "label": "Strategy 2 · Consolidation", "preferred": preferred_strategy == "STRATEGY_2",
+                     "status": strategy2_candidate.get("status"), "direction": strategy2_candidate.get("direction"),
+                     "rationale": strategy2_candidate.get("rationale"), "legs": strategy2_candidate.get("legs", [])},
+                ]
                 # A futures leg uses the current underlying LTP. Every
                 # displayed leg receives an explicit limit price so the UI
                 # never presents MKT as an executable price.
