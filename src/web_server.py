@@ -9,7 +9,7 @@ if sys.stdout.encoding != 'utf-8':
 from flask import Flask, jsonify, render_template, request, Response, session, redirect, url_for
 import threading
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timedelta
 from src.state_manager import StateManager
 from src.config import TIMEZONE
 from colorama import Fore, Style
@@ -21,7 +21,21 @@ import json
 # Use CWD (Current Working Directory) assumption since we run from root
 template_dir = os.path.abspath("templates")
 app = Flask(__name__, template_folder='../templates')
-app.secret_key = secrets.token_hex(16) # Random key for sessions
+# Keep browser sessions valid across normal app restarts. Set SESSION_SECRET_KEY
+# in Railway (and local .env) to the same private value in every environment.
+app.secret_key = (
+    os.getenv("SESSION_SECRET_KEY")
+    or os.getenv("FLASK_SECRET_KEY")
+    or os.getenv("SECRET_KEY")
+    or "ng-automation-bot-development-session-key"
+)
+app.config.update(
+    SESSION_COOKIE_NAME="ng_session",
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true",
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+)
 
 # Disable caching for all responses
 @app.after_request
@@ -81,14 +95,9 @@ def role_required(min_role):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            if "user_token" not in session:
-                return jsonify({"status": "error", "message": "Login Required"}), 401
-
-            state_mgr = StateManager.get_instance()
-            user = state_mgr.user_manager.get_user_by_token(session["user_token"])
-
+            user = _restore_authenticated_session()
             if not user:
-                return jsonify({"status": "error", "message": "Invalid Session"}), 401
+                return jsonify({"status": "error", "message": "Login Required"}), 401
 
             # Check permissions
             allowed_actions = ROLES.get(user["role"], [])
@@ -109,10 +118,34 @@ def role_required(min_role):
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if 'user_token' not in session:
+        # Keep compatibility with existing signed sessions that only contain
+        # the legacy token. New sessions are fully rehydrated above.
+        if not _restore_authenticated_session() and not session.get('user_token'):
              return redirect(url_for('login', next=request.url))
         return f(*args, **kwargs)
     return decorated_function
+
+
+def _restore_authenticated_session():
+    """Validate the signed browser session and rehydrate its process token.
+
+    Flask's permanent cookie carries the username, while UserManager keeps the
+    short-lived permission token in memory. Rehydrating here means a Railway
+    restart does not unexpectedly send an already logged-in user to /login.
+    """
+    manager = StateManager.get_instance().user_manager
+    token = session.get("user_token")
+    user = manager.get_user_by_token(token) if token else None
+    username = str(session.get("username") or "").strip().lower()
+    if not user and username:
+        candidate = manager.users.get(username)
+        if candidate and candidate.get("active"):
+            session["user_token"] = manager.create_session(username)
+            session["username"] = username
+            session["role"] = candidate.get("role", "VIEWER")
+            session["must_change_password"] = bool(candidate.get("must_change_password", False))
+            user = candidate
+    return user
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -124,6 +157,7 @@ def login():
         token, user = state_mgr.user_manager.authenticate(username, password)
 
         if token:
+            session.permanent = True
             session['user_token'] = token
             session['username'] = username
             session['role'] = user['role']

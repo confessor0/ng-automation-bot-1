@@ -513,6 +513,9 @@
         .trend-calendar-swatch.potential { border:2px dashed #f59e0b; }
         .trend-calendar-swatch.no-record { background:repeating-linear-gradient(135deg,#263349 0 3px,#101827 3px 6px); }
         .trend-calendar { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,310px),1fr)); gap:14px; margin-bottom:14px; }
+        .trend-calendar-toolbar { display:flex; align-items:center; justify-content:flex-start; gap:8px; grid-column:1 / -1; flex-wrap:wrap; }
+        .trend-calendar-toolbar strong { min-width:150px; text-align:center; color:#e2e8f0; font-size:13px; }
+        .trend-calendar-toolbar .btn { padding:6px 10px; min-height:32px; }
         .trend-calendar-month { background:rgba(2,6,23,.3); border:1px solid rgba(255,255,255,.07); border-radius:10px; padding:12px; min-width:0; }
         .trend-calendar-month h3 { margin:0 0 10px; color:#e2e8f0; font-size:12px; font-weight:800; }
         .trend-calendar-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:5px; }
@@ -524,6 +527,8 @@
         .trend-calendar-day.neutral { background:#64748b; color:#fff; }
         .trend-calendar-day.potential { background:rgba(245,158,11,.1); border:2px dashed #f59e0b; color:#fbbf24; }
         .trend-calendar-day.no-record { background:repeating-linear-gradient(135deg,#263349 0 4px,#101827 4px 8px); color:#94a3b8; }
+        .trend-calendar-day.today-pending { background:rgba(59,130,246,.12); border:2px solid #60a5fa; color:#bfdbfe; }
+        .trend-calendar-day.future { background:#101827; color:#64748b; border:1px dashed #334155; }
         .trend-calendar-day.weekend { background:transparent; color:#64748b; }
         .trend-calendar-day.outside { visibility:hidden; }
         .trend-calendar-day.change::before { content:'↕'; position:absolute; top:3px; right:5px; font-size:11px; }
@@ -742,6 +747,47 @@
                 font-size: 11px;
                 padding: 4px 8px;
             }
+        }
+
+        /* Phone layout hardening: several dashboard cards are assembled with
+           inline desktop grids, so these rules intentionally override those
+           widths at the compact breakpoint. */
+        @media (max-width: 600px) {
+            .container { width: 100%; padding: 8px; }
+            .header { border-radius: 12px; padding: 12px; gap: 12px; }
+            .logo h1 { font-size: 17px; line-height: 1.25; }
+            .header-actions { display: grid; grid-template-columns: 1fr 1fr; width: 100%; gap: 8px; }
+            .header-actions > #brokerStatusPill,
+            .header-actions > #statusToggle { margin-right: 0 !important; justify-content: center; min-width: 0; }
+            .header-actions > div[style*="display: flex"] { grid-column: 1 / -1; width: 100%; justify-content: space-between; }
+            #lastUpdatedLabel { display: none; }
+            #refreshBtn { width: 100%; justify-content: center; min-height: 42px; }
+            .tabs { margin-bottom: 14px; border-radius: 10px; }
+            .tab { padding: 10px 12px; font-size: 12px; }
+            .card { border-radius: 10px; }
+            .card-title { line-height: 1.3; }
+            #tab-dashboard .card .grid,
+            #tab-dashboard .card div[style*="grid-template-columns: repeat(4"],
+            #tab-dashboard .card div[style*="grid-template-columns: repeat(3"],
+            #tab-dashboard .card div[style*="grid-template-columns: repeat(2"] { grid-template-columns: 1fr !important; }
+            .trend-summary-grid { grid-template-columns: 1fr 1fr !important; gap: 8px; }
+            .trend-calendar { grid-template-columns: 1fr; gap: 8px; }
+            .trend-calendar-month { padding: 8px; }
+            .trend-calendar-grid { gap: 3px; }
+            .trend-calendar-day { min-height: 43px; font-size: 9px; }
+            .trend-calendar-day small { font-size: 7px; }
+            .admin-intro { padding: 14px; }
+            .admin-intro h2 { font-size: 18px; }
+            .table-wrap, .journal-table-wrap, .data-table-wrap { max-width: 100%; overflow-x: auto; }
+            table { min-width: 620px; }
+            .modal-backdrop > div { width: calc(100vw - 16px) !important; max-height: 94vh; padding: 14px !important; }
+        }
+
+        @media (max-width: 380px) {
+            .header-actions { grid-template-columns: 1fr; }
+            .header-actions > div[style*="display: flex"] { grid-column: auto; }
+            .trend-summary-grid { grid-template-columns: 1fr !important; }
+            .btn { font-size: 12px; padding: 9px 10px; }
         }
 
         /* Modal Backdrop */
@@ -1557,6 +1603,7 @@
                     <span><i class="trend-calendar-swatch neutral"></i>Neutral —</span>
                     <span><i class="trend-calendar-swatch potential"></i>Potential, unconfirmed</span>
                     <span><i class="trend-calendar-swatch no-record"></i>No saved record</span>
+                    <span>Today / future: pending completed candle</span>
                     <span>↕ Confirmed change · White ring: latest · Blue ring: selected</span>
                 </div>
                 <div id="trendTimeline" class="trend-calendar" aria-label="Completed candle trend calendar"><span style="color:#94a3b8;font-size:11px;">Run a scan to build the trend calendar.</span></div>
@@ -2538,6 +2585,20 @@
                 .catch(err => console.error("Console Poll Error:", err));
         }
 
+        let trendCalendarMonthKey = null;
+
+        function istDateKey(value = new Date()) {
+            const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(value);
+            const get = type => parts.find(part => part.type === type)?.value || '';
+            return `${get('year')}-${get('month')}-${get('day')}`;
+        }
+
+        function shiftCalendarMonth(key, offset) {
+            const [year, month] = key.split('-').map(Number);
+            const date = new Date(Date.UTC(year, month - 1 + offset, 1));
+            return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+        }
+
         function renderTrendCalendar(signals, potential, scanId) {
             const calendar = document.getElementById('trendTimeline');
             const selection = document.getElementById('trendCalendarSelection');
@@ -2549,92 +2610,88 @@
                 if (dayPattern.test(date) && !byDate.has(date)) byDate.set(date, event);
             });
             const dates = [...byDate.keys()].sort();
+            const todayKey = istDateKey();
+            const todayMonth = todayKey.slice(0, 7);
+            if (!trendCalendarMonthKey) trendCalendarMonthKey = todayMonth;
             const potentialDate = String(potential?.occurred_at || '').slice(0, 10);
-            if (!dates.length) {
-                calendar.textContent = 'Run a scan to build the completed-candle calendar.';
-                if (selection) selection.textContent = 'Select a dated tile to find its saved signal in the journal below. Dates use IST.';
-                return;
-            }
-            const firstDate = dates[0];
-            const latestDate = dates[dates.length - 1];
-            const lastDate = potential && dayPattern.test(potentialDate) && potentialDate > latestDate ? potentialDate : latestDate;
-            const firstMonth = new Date(`${firstDate.slice(0, 7)}-01T00:00:00Z`);
-            const lastMonth = new Date(`${lastDate.slice(0, 7)}-01T00:00:00Z`);
+            const latestDate = dates[dates.length - 1] || '';
+            const [year, monthNumberOneBased] = trendCalendarMonthKey.split('-').map(Number);
+            const monthNumber = monthNumberOneBased - 1;
+            const month = new Date(Date.UTC(year, monthNumber, 1));
             calendar.replaceChildren();
-            for (let month = firstMonth; month <= lastMonth; month = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 1))) {
-                const year = month.getUTCFullYear();
-                const monthNumber = month.getUTCMonth();
-                const panel = document.createElement('section');
-                panel.className = 'trend-calendar-month';
-                const heading = document.createElement('h3');
-                heading.textContent = month.toLocaleString('en-IN', {month:'long', year:'numeric', timeZone:'UTC'});
-                panel.appendChild(heading);
-                const grid = document.createElement('div');
-                grid.className = 'trend-calendar-grid';
-                ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(name => {
-                    const label = document.createElement('span');
-                    label.className = 'trend-calendar-weekday';
-                    label.textContent = name;
-                    grid.appendChild(label);
-                });
-                const leading = (month.getUTCDay() + 6) % 7;
-                for (let index = 0; index < leading; index++) {
-                    const blank = document.createElement('span');
-                    blank.className = 'trend-calendar-day outside';
-                    grid.appendChild(blank);
+
+            const toolbar = document.createElement('div');
+            toolbar.className = 'trend-calendar-toolbar';
+            toolbar.innerHTML = `<button type="button" class="btn btn-secondary" data-calendar-prev aria-label="Previous month">‹</button><strong>${month.toLocaleString('en-IN', {month:'long', year:'numeric', timeZone:'UTC'})}</strong><button type="button" class="btn btn-secondary" data-calendar-next aria-label="Next month">›</button><button type="button" class="btn btn-secondary" data-calendar-today>Today</button>`;
+            toolbar.querySelector('[data-calendar-prev]').addEventListener('click', () => { trendCalendarMonthKey = shiftCalendarMonth(trendCalendarMonthKey, -1); renderTrendCalendar(signals, potential, scanId); });
+            toolbar.querySelector('[data-calendar-next]').addEventListener('click', () => { trendCalendarMonthKey = shiftCalendarMonth(trendCalendarMonthKey, 1); renderTrendCalendar(signals, potential, scanId); });
+            toolbar.querySelector('[data-calendar-today]').addEventListener('click', () => { trendCalendarMonthKey = todayMonth; renderTrendCalendar(signals, potential, scanId); });
+            calendar.appendChild(toolbar);
+
+            const panel = document.createElement('section');
+            panel.className = 'trend-calendar-month';
+            const grid = document.createElement('div');
+            grid.className = 'trend-calendar-grid';
+            ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].forEach(name => {
+                const label = document.createElement('span'); label.className = 'trend-calendar-weekday'; label.textContent = name; grid.appendChild(label);
+            });
+            const leading = (month.getUTCDay() + 6) % 7;
+            for (let index = 0; index < leading; index++) { const blank = document.createElement('span'); blank.className = 'trend-calendar-day outside'; grid.appendChild(blank); }
+            const numberOfDays = new Date(Date.UTC(year, monthNumber + 1, 0)).getUTCDate();
+            for (let number = 1; number <= numberOfDays; number++) {
+                const date = `${year}-${String(monthNumber + 1).padStart(2, '0')}-${String(number).padStart(2, '0')}`;
+                const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
+                const event = byDate.get(date);
+                const isPotential = Boolean(potential && dayPattern.test(potentialDate) && date === potentialDate);
+                const isToday = date === todayKey;
+                const isFuture = date > todayKey;
+                const tile = document.createElement(event || isPotential ? 'button' : 'span');
+                tile.className = 'trend-calendar-day';
+                if (event) {
+                    const trend = ['BULLISH','BEARISH','NEUTRAL'].includes(event.trend) ? event.trend : 'NEUTRAL';
+                    tile.classList.add(trend.toLowerCase());
+                    if (event.previous_trend && event.previous_trend !== event.trend) tile.classList.add('change');
+                    if (date === latestDate) tile.classList.add('latest');
+                    if (date === window.selectedTrendCalendarDate) tile.classList.add('selected');
+                    tile.type = 'button';
+                    tile.setAttribute('aria-label', `${date} IST: confirmed ${trend.toLowerCase()}${tile.classList.contains('change') ? ', trend changed' : ', trend continues'}`);
+                    tile.title = `${date} IST · ${trend} · ${String(event.signal_status || '').replaceAll('_', ' ')}`;
+                    tile.addEventListener('click', () => {
+                        window.selectedTrendCalendarDate = date;
+                        calendar.querySelectorAll('.trend-calendar-day.selected').forEach(item => item.classList.remove('selected'));
+                        tile.classList.add('selected');
+                        const details = event.payload?.details || {};
+                        if (selection) selection.textContent = `${date} IST · Confirmed ${trend} · CE ${details.ce_close ?? '—'} / MA9 ${details.ce_ma9 ?? '—'} · PE ${details.pe_close ?? '—'} / MA9 ${details.pe_ma9 ?? '—'}`;
+                        const row = [...document.querySelectorAll('#strategyEventBody tr')].find(item => item.dataset.candleDate === date && item.dataset.scanId === scanId && item.dataset.eventType === 'HISTORICAL_SIGNAL');
+                        document.querySelectorAll('#strategyEventBody tr').forEach(item => item.classList.remove('journal-selected-row'));
+                        if (row) { row.classList.add('journal-selected-row'); row.scrollIntoView({behavior:'smooth', block:'center'}); }
+                    });
+                } else if (isPotential) {
+                    tile.classList.add('potential'); tile.type = 'button';
+                    tile.setAttribute('aria-label', `${date} IST: possible trend change, not confirmed`);
+                    tile.title = 'Potential intraday change; wait for completed daily candle';
+                    tile.addEventListener('click', () => { if (selection) selection.textContent = `${date} IST · Potential ${potential.payload?.potential_trend || 'trend change'} · Not confirmed until the daily candle closes.`; });
+                } else if (isToday) {
+                    tile.classList.add('today-pending'); tile.title = `${date} IST · Today · completed candle not saved yet`;
+                } else if (isFuture) {
+                    tile.classList.add('future'); tile.title = `${date} IST · Future trading date · no candle record yet`;
+                } else if (weekday === 0 || weekday === 6) {
+                    tile.classList.add('weekend');
+                } else {
+                    tile.classList.add('no-record'); tile.title = `${date} IST · No saved candle record; may be a market holiday`;
                 }
-                const numberOfDays = new Date(Date.UTC(year, monthNumber + 1, 0)).getUTCDate();
-                for (let number = 1; number <= numberOfDays; number++) {
-                    const date = `${year}-${String(monthNumber + 1).padStart(2, '0')}-${String(number).padStart(2, '0')}`;
-                    const weekday = new Date(`${date}T00:00:00Z`).getUTCDay();
-                    const event = byDate.get(date);
-                    const isPotential = date === potentialDate && potential && date > latestDate;
-                    const tile = document.createElement(event || isPotential ? 'button' : 'span');
-                    tile.className = 'trend-calendar-day';
-                    if (date < firstDate || date > lastDate) tile.classList.add('outside');
-                    else if (event) {
-                        const trend = ['BULLISH','BEARISH','NEUTRAL'].includes(event.trend) ? event.trend : 'NEUTRAL';
-                        tile.classList.add(trend.toLowerCase());
-                        if (event.previous_trend && event.previous_trend !== event.trend) tile.classList.add('change');
-                        if (date === latestDate) tile.classList.add('latest');
-                        if (date === window.selectedTrendCalendarDate) tile.classList.add('selected');
-                        tile.type = 'button';
-                        tile.setAttribute('aria-label', `${date} IST: confirmed ${trend.toLowerCase()}${tile.classList.contains('change') ? ', trend changed' : ', trend continues'}`);
-                        tile.title = `${date} IST · ${trend} · ${String(event.signal_status || '').replaceAll('_', ' ')}`;
-                        tile.addEventListener('click', () => {
-                            window.selectedTrendCalendarDate = date;
-                            calendar.querySelectorAll('.trend-calendar-day.selected').forEach(item => item.classList.remove('selected'));
-                            tile.classList.add('selected');
-                            const details = event.payload?.details || {};
-                            if (selection) selection.textContent = `${date} IST · Confirmed ${trend} · CE ${details.ce_close ?? '—'} / MA9 ${details.ce_ma9 ?? '—'} · PE ${details.pe_close ?? '—'} / MA9 ${details.pe_ma9 ?? '—'}`;
-                            const rows = [...document.querySelectorAll('#strategyEventBody tr')];
-                            rows.forEach(row => row.classList.remove('journal-selected-row'));
-                            const row = rows.find(item => item.dataset.candleDate === date && item.dataset.scanId === scanId && item.dataset.eventType === 'HISTORICAL_SIGNAL');
-                            if (row) { row.classList.add('journal-selected-row'); row.scrollIntoView({behavior:'smooth', block:'center'}); }
-                        });
-                    } else if (isPotential) {
-                        tile.classList.add('potential');
-                        tile.type = 'button';
-                        tile.setAttribute('aria-label', `${date} IST: possible ${potential.payload?.potential_trend || 'trend change'}, not confirmed`);
-                        tile.title = 'Potential intraday change; wait for completed daily candle';
-                        tile.addEventListener('click', () => { if (selection) selection.textContent = `${date} IST · Potential ${potential.payload?.potential_trend || 'trend change'} · Not confirmed until the daily candle closes.`; });
-                    } else if (weekday === 0 || weekday === 6) tile.classList.add('weekend');
-                    else { tile.classList.add('no-record'); tile.title = `${date} IST · No saved candle record; may be a market holiday`; }
-                    tile.textContent = String(number);
-                    if (event || isPotential) {
-                        const status = document.createElement('small');
-                        status.textContent = isPotential ? 'PENDING' : tile.classList.contains('change') ? 'CHANGE' : event.signal_status?.startsWith('PAIRED_') ? 'CROSS' : event.signal_status?.startsWith('TREND_CONTINUES') ? 'CONT.' : (event.trend === 'BULLISH' ? '↑' : event.trend === 'BEARISH' ? '↓' : '—');
-                        tile.appendChild(status);
-                    } else if (tile.classList.contains('no-record')) {
-                        const status = document.createElement('small');
-                        status.textContent = 'NO RECORD';
-                        tile.appendChild(status);
-                    }
-                    grid.appendChild(tile);
-                }
-                panel.appendChild(grid);
-                calendar.appendChild(panel);
+                tile.textContent = String(number);
+                const status = document.createElement('small');
+                if (event) status.textContent = tile.classList.contains('change') ? 'CHANGE' : event.signal_status?.startsWith('PAIRED_') ? 'CROSS' : event.signal_status?.startsWith('TREND_CONTINUES') ? 'CONT.' : (event.trend === 'BULLISH' ? '↑' : event.trend === 'BEARISH' ? '↓' : '—');
+                else if (isPotential) status.textContent = 'PENDING';
+                else if (isToday) status.textContent = 'TODAY';
+                else if (isFuture) status.textContent = 'FUTURE';
+                else if (tile.classList.contains('no-record')) status.textContent = 'NO RECORD';
+                if (status.textContent) tile.appendChild(status);
+                grid.appendChild(tile);
             }
+            panel.appendChild(grid); calendar.appendChild(panel);
+            if (selection && !dates.length) selection.textContent = `${todayKey} IST · No completed-candle records in this month yet. Today and future dates remain pending until a candle closes and a scan saves them.`;
         }
 
         function pollStrategyEvents() {
@@ -3785,8 +3842,17 @@
             try {
                 // Call them one by one to ensure they work
                 await refreshData();
-                await loadLiveOrders();
-                await loadLivePositions();
+                // The button is the single on-demand refresh boundary. Refresh
+                // live data first, then repaint every cached dashboard panel so
+                // no section remains stale after the click.
+                await Promise.allSettled([loadLiveOrders(), loadLivePositions()]);
+                pollLocalStateOnly();
+                pollStrategyState();
+                pollOrderIntents();
+                pollIntentHistory();
+                pollMasterConsole();
+                pollStrategyEvents();
+                pollStrategyScans();
                 console.log("✅ [DEBUG] Refresh sequence done");
             } catch (e) {
                 console.error("❌ [DEBUG] Refresh Error:", e);

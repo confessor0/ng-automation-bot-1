@@ -81,8 +81,7 @@ class UserManager:
     def authenticate(self, username, password):
         user = self.users.get(username)
         if user and user.get("active") and self._verify_password(user, password):
-            token = str(uuid.uuid4())
-            self.sessions[token] = username
+            token = self.create_session(username)
             # Migrate legacy plaintext credentials on the first successful login.
             if user.get("password") and not user.get("password_hash"):
                 user["password_hash"] = generate_password_hash(str(password))
@@ -91,6 +90,17 @@ class UserManager:
             self.save_users()
             return token, user
         return None, None
+
+    def create_session(self, username):
+        """Create a process-local session token for an already validated user.
+
+        Browser sessions are signed by Flask, while this token is used by the
+        existing permission checks. Re-issuing it lets a valid persistent
+        browser session survive an application process restart.
+        """
+        token = str(uuid.uuid4())
+        self.sessions[token] = username
+        return token
 
     @staticmethod
     def _verify_password(user, password):
